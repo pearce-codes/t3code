@@ -263,27 +263,6 @@ const makeKiroAdapter = () =>
               const allowOption = params.options.find(
                 (o) => o.kind === "allow_always" || o.kind === "allow_once",
               );
-              emitEvents([
-                {
-                  ...baseEvent(threadId),
-                  requestId: RuntimeRequestId.makeUnsafe(requestId),
-                  type: "request.opened",
-                  payload: {
-                    requestType: "unknown",
-                    ...(detail ? { detail } : {}),
-                    args: params,
-                  },
-                },
-                {
-                  ...baseEvent(threadId),
-                  requestId: RuntimeRequestId.makeUnsafe(requestId),
-                  type: "request.resolved",
-                  payload: {
-                    requestType: "unknown",
-                    decision: "approved",
-                  },
-                },
-              ]);
               return {
                 outcome: {
                   outcome: "selected" as const,
@@ -316,6 +295,9 @@ const makeKiroAdapter = () =>
             const session = sessions.get(threadId);
             emitEvents(mapSessionUpdate(threadId, session?.activeTurnId, params.update));
           },
+
+          // Silently ignore kiro-cli proprietary notifications (_kiro.dev/*)
+          extNotification: async () => {},
         }),
         stream,
       );
