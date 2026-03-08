@@ -166,6 +166,7 @@ import {
   CursorIcon,
   Gemini,
   Icon,
+  KiroIcon,
   OpenAI,
   OpenCodeIcon,
   VisualStudioCode,
@@ -5300,11 +5301,13 @@ function getCustomModelOptionsByProvider(settings: {
 }): Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>> {
   return {
     codex: getAppModelOptions("codex", settings.customCodexModels),
+    kiro: getAppModelOptions("kiro", []),
   };
 }
 
 const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   codex: OpenAI,
+  kiro: KiroIcon,
   claudeCode: ClaudeAI,
   cursor: CursorIcon,
 };

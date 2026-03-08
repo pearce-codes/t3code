@@ -28,6 +28,16 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "gpt-5.2-codex", name: "GPT-5.2 Codex" },
     { slug: "gpt-5.2", name: "GPT-5.2" },
   ],
+  kiro: [
+    { slug: "claude-opus-4.6", name: "Claude Opus 4.6" },
+    { slug: "claude-sonnet-4.6", name: "Claude Sonnet 4.6" },
+    { slug: "claude-sonnet-4.5", name: "Claude Sonnet 4.5" },
+    { slug: "claude-sonnet-4", name: "Claude Sonnet 4" },
+    { slug: "deepseek-3.2", name: "DeepSeek 3.2" },
+    { slug: "minimax-m2.1", name: "MiniMax M2.1" },
+    { slug: "qwen3-coder-next", name: "Qwen3 Coder Next" },
+    { slug: "auto", name: "Auto" },
+  ],
 } as const satisfies Record<ProviderKind, readonly ModelOption[]>;
 export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 
@@ -36,6 +46,7 @@ export type ModelSlug = BuiltInModelSlug | (string & {});
 
 export const DEFAULT_MODEL_BY_PROVIDER = {
   codex: "gpt-5.4",
+  kiro: "claude-sonnet-4.6",
 } as const satisfies Record<ProviderKind, ModelSlug>;
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER = {
@@ -46,12 +57,15 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER = {
     "5.3-spark": "gpt-5.3-codex-spark",
     "gpt-5.3-spark": "gpt-5.3-codex-spark",
   },
+  kiro: {},
 } as const satisfies Record<ProviderKind, Record<string, ModelSlug>>;
 
 export const REASONING_EFFORT_OPTIONS_BY_PROVIDER = {
   codex: CODEX_REASONING_EFFORT_OPTIONS,
+  kiro: [],
 } as const satisfies Record<ProviderKind, readonly CodexReasoningEffort[]>;
 
 export const DEFAULT_REASONING_EFFORT_BY_PROVIDER = {
   codex: "high",
+  kiro: null,
 } as const satisfies Record<ProviderKind, CodexReasoningEffort | null>;

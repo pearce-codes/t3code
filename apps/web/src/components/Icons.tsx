@@ -339,3 +339,12 @@ export const OpenCodeIcon: Icon = (props) => (
     </defs>
   </svg>
 );
+
+export const KiroIcon: Icon = (props) => (
+  <svg {...props} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect width="24" height="24" rx="4" fill="#232F3E" />
+    <text x="12" y="16" textAnchor="middle" fill="white" fontSize="12" fontWeight="bold">
+      K
+    </text>
+  </svg>
+);
