@@ -296,8 +296,44 @@ const makeKiroAdapter = () =>
             emitEvents(mapSessionUpdate(threadId, session?.activeTurnId, params.update));
           },
 
-          // Silently ignore kiro-cli proprietary notifications (_kiro.dev/*)
-          extNotification: async () => {},
+          // Handle kiro-cli proprietary notifications
+          extNotification: async (method: string, params: unknown) => {
+            switch (method) {
+              case "_kiro.dev/metadata": {
+                const p = params as { sessionId?: string; contextUsagePercentage?: number };
+                console.log("[kiro] metadata", {
+                  sessionId: p.sessionId,
+                  contextUsagePercentage: p.contextUsagePercentage,
+                });
+                break;
+              }
+              case "_kiro.dev/mcp/server_initialized": {
+                const p = params as { sessionId?: string; serverName?: string };
+                console.log("[kiro] mcp server initialized", {
+                  sessionId: p.sessionId,
+                  serverName: p.serverName,
+                });
+                break;
+              }
+              case "_kiro.dev/commands/available": {
+                const p = params as {
+                  sessionId?: string;
+                  commands?: unknown[];
+                  tools?: unknown[];
+                  mcpServers?: unknown[];
+                };
+                console.log("[kiro] commands available", {
+                  sessionId: p.sessionId,
+                  commands: p.commands?.length ?? 0,
+                  tools: p.tools?.length ?? 0,
+                  mcpServers: p.mcpServers?.length ?? 0,
+                });
+                break;
+              }
+              default:
+                console.log("[kiro] unhandled notification", { method });
+            }
+          },
         }),
         stream,
       );
