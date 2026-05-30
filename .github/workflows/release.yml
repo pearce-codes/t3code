@@ -98,6 +98,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Ensure Electron runtime is installed
+        run: bun scripts/ensure-electron-runtime.mjs
+
       - id: release_meta
         name: Resolve release version
         shell: bash
