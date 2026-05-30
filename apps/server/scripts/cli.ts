@@ -46,6 +46,24 @@ class CliError extends Data.TaggedError("CliError")<{
   readonly cause?: unknown;
 }> {}
 
+const normalizePublishBin = (bin: Record<string, string>) =>
+  Object.fromEntries(
+    Object.entries(bin).map(([name, command]) => [
+      name,
+      command.startsWith("./") ? command.slice(2) : command,
+    ]),
+  );
+
+const normalizePublishRepository = (repository: PackageJson["repository"]) => {
+  const prefixedUrl = repository.url.startsWith("git+") ? repository.url : `git+${repository.url}`;
+  const url = prefixedUrl.endsWith(".git") ? prefixedUrl : `${prefixedUrl}.git`;
+
+  return {
+    ...repository,
+    url,
+  };
+};
+
 const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("../../..", import.meta.url))),
 );
@@ -67,18 +85,24 @@ interface PublishIconBackup {
   readonly backupPath: string;
 }
 
+interface PublishIconBackups {
+  readonly rootPath: string;
+  readonly entries: ReadonlyArray<PublishIconBackup>;
+}
+
 const applyPublishIconOverrides = Effect.fn("applyPublishIconOverrides")(function* (
   repoRoot: string,
   serverDir: string,
 ) {
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
+  const backupRoot = yield* fs.makeTempDirectory({ prefix: "t3code-publish-icons-" });
   const backups: PublishIconBackup[] = [];
 
   for (const override of PUBLISH_ICON_OVERRIDES) {
     const sourcePath = path.join(repoRoot, override.sourceRelativePath);
     const targetPath = path.join(serverDir, override.targetRelativePath);
-    const backupPath = `${targetPath}.publish-bak`;
+    const backupPath = path.join(backupRoot, override.targetRelativePath.replace(/[\\/]/g, "__"));
 
     if (!(yield* fs.exists(sourcePath))) {
       return yield* new CliError({
@@ -97,19 +121,23 @@ const applyPublishIconOverrides = Effect.fn("applyPublishIconOverrides")(functio
   }
 
   yield* Effect.log("[cli] Applied publish icon overrides to dist/client");
-  return backups as ReadonlyArray<PublishIconBackup>;
+  return {
+    entries: backups,
+    rootPath: backupRoot,
+  } satisfies PublishIconBackups;
 });
 
 const restorePublishIconOverrides = Effect.fn("restorePublishIconOverrides")(function* (
-  backups: ReadonlyArray<PublishIconBackup>,
+  backups: PublishIconBackups,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  for (const backup of backups) {
+  for (const backup of backups.entries) {
     if (!(yield* fs.exists(backup.backupPath))) {
       continue;
     }
     yield* fs.rename(backup.backupPath, backup.targetPath);
   }
+  yield* fs.remove(backups.rootPath, { force: true, recursive: true });
 });
 
 const applyDevelopmentIconOverrides = Effect.fn("applyDevelopmentIconOverrides")(function* (
@@ -219,8 +247,8 @@ const publishCmd = Command.make(
           const version = Option.getOrElse(config.appVersion, () => serverPackageJson.version);
           const pkg: PackageJson = {
             name: PublishedPackageName,
-            repository: serverPackageJson.repository,
-            bin: serverPackageJson.bin,
+            repository: normalizePublishRepository(serverPackageJson.repository),
+            bin: normalizePublishBin(serverPackageJson.bin),
             type: serverPackageJson.type,
             version,
             engines: serverPackageJson.engines,
@@ -265,7 +293,7 @@ const publishCmd = Command.make(
             );
           }),
         // Release: restore
-        (resource: { readonly iconBackups: ReadonlyArray<PublishIconBackup> }) =>
+        (resource: { readonly iconBackups: PublishIconBackups }) =>
           Effect.gen(function* () {
             yield* restorePublishIconOverrides(resource.iconBackups).pipe(
               Effect.catch((error) =>
