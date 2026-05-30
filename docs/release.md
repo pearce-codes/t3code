@@ -7,36 +7,44 @@ This document covers the unified release workflow for stable and nightly desktop
 - Workflow: `.github/workflows/release.yml`
 - Triggers:
   - push tag matching `v*.*.*` for stable releases
-  - scheduled nightly at `09:00 UTC`
+  - scheduled nightly checks every three hours
   - manual `workflow_dispatch` for either channel
 - Runs quality gates first: lint, typecheck, test.
-- Builds four artifacts in parallel for both channels:
+- Builds three artifacts in parallel for both channels:
   - macOS `arm64` DMG
   - macOS `x64` DMG
   - Linux `x64` AppImage
-  - Windows `x64` NSIS installer
 - Publishes one GitHub Release with all produced files.
   - Stable tags with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
   - Only plain stable `X.Y.Z` releases are marked as the repository's latest release.
   - Nightly runs are always GitHub prereleases and never marked latest.
   - Automatically generated release notes are pinned to the previous tag in the same channel, so stable compares to the previous stable tag and nightly compares to the previous nightly tag.
 - Includes Electron auto-update metadata (for example `latest*.yml`, `nightly*.yml`, and `*.blockmap`) in release assets.
-- Publishes the CLI package (`apps/server`, npm package `t3`) with OIDC trusted publishing from the same workflow file:
+- Publishes the CLI package (`apps/server`, npm package `@pearcecodes/t3code`) with OIDC trusted publishing from the same workflow file:
   - stable releases publish npm dist-tag `latest`
   - nightly releases publish npm dist-tag `nightly`
-- Deploys the hosted web app to Vercel only after a release is published:
-  - stable releases are aliased to the `latest` hosted app channel
-  - nightly releases are aliased to the `nightly` hosted app channel
+  - the internal workspace package stays named `t3`; the publish script rewrites
+    the package name to `@pearcecodes/t3code` only for `npm publish`
+- Hosted web app deployment to Vercel is deferred for this fork. See
+  `docs/pearcecodes-fork-release-setup.md` for the planned P2 domains.
 - Signing is optional and auto-detected per platform from secrets.
 
 ## Hosted web app release deployment
 
-The hosted app is intentionally not deployed by Vercel's Git integration. The
-web project disables automatic Git deployments in `apps/web/vercel.ts` via
-`git.deploymentEnabled: false`, and `.github/workflows/release.yml` deploys the
-web app with Vercel CLI after the GitHub Release succeeds.
+The hosted app is intentionally deferred for this fork. Desktop auto-updates do
+not depend on Vercel; the desktop app reads update metadata from GitHub Release
+assets.
 
-Required GitHub Actions secrets:
+Before re-enabling hosted deployment, make `apps/web/vercel.ts` environment
+driven instead of hardcoding the upstream `app.t3.codes` hostnames. Planned fork
+domains are documented in `docs/pearcecodes-fork-release-setup.md`.
+
+When P2 hosted deployment is re-enabled, the web project should continue to
+disable automatic Git deployments in `apps/web/vercel.ts` via
+`git.deploymentEnabled: false`, and `.github/workflows/release.yml` can deploy
+the web app with Vercel CLI after the GitHub Release succeeds.
+
+Future GitHub Actions secrets:
 
 - `VERCEL_TOKEN`
 - `VERCEL_ORG_ID`
@@ -45,30 +53,31 @@ Required GitHub Actions secrets:
 Optional GitHub Actions variables:
 
 - `VERCEL_TEAM_SLUG`: overrides the Vercel CLI scope when the team slug is preferred over the `VERCEL_ORG_ID` secret.
-- `T3CODE_WEB_ROUTER_URL`: defaults to `https://app.t3.codes`.
-- `T3CODE_WEB_LATEST_DOMAIN`: defaults to `latest.app.t3.codes`.
-- `T3CODE_WEB_NIGHTLY_DOMAIN`: defaults to `nightly.app.t3.codes`.
+- `T3CODE_WEB_ROUTER_URL`: planned value `https://code.pearcecodes.com`.
+- `T3CODE_WEB_LATEST_DOMAIN`: planned value `latest.code.pearcecodes.com`.
+- `T3CODE_WEB_NIGHTLY_DOMAIN`: planned value `nightly.code.pearcecodes.com`.
 
 Required Vercel domains:
 
-- `app.t3.codes`: the router domain users open, updated by stable releases.
-- `latest.app.t3.codes`: channel alias updated by stable releases.
-- `nightly.app.t3.codes`: channel alias updated by nightly releases.
+- `code.pearcecodes.com`: the router domain users open, updated by stable releases.
+- `latest.code.pearcecodes.com`: channel alias updated by stable releases.
+- `nightly.code.pearcecodes.com`: channel alias updated by nightly releases.
 
 The router domain uses `apps/web/vercel.ts` routes. Users opt into a channel by
 visiting `/__t3code/channel?channel=latest` or
 `/__t3code/channel?channel=nightly`; the router stores the
-`t3code_web_channel` cookie and rewrites future requests on `app.t3.codes` to
-the matching channel alias.
+`t3code_web_channel` cookie and rewrites future requests on
+`code.pearcecodes.com` to the matching channel alias.
 
-The release deploy job rewrites release package versions before upload so the
-hosted app's About panel renders the release version. Stable deploys alias the
-same deployment to both the `latest` channel and the router domain so the router
-rules stay current. Nightly deploys only alias the `nightly` channel. The job
-also passes `VITE_HOSTED_APP_CHANNEL=latest|nightly`, which renders the hosted
-update track selector in the About panel. Changing the selector navigates
-through `/__t3code/channel` on the router domain so the user's channel cookie is
-updated before redirecting to the hosted app root.
+The future release deploy job should rewrite release package versions before
+upload so the hosted app's About panel renders the release version. Stable
+deploys should alias the same deployment to both the `latest` channel and the
+router domain so the router rules stay current. Nightly deploys should only
+alias the `nightly` channel. The job should also pass
+`VITE_HOSTED_APP_CHANNEL=latest|nightly`, which renders the hosted update track
+selector in the About panel. Changing the selector navigates through
+`/__t3code/channel` on the router domain so the user's channel cookie is updated
+before redirecting to the hosted app root.
 
 One-time Vercel dashboard setup:
 
@@ -78,14 +87,14 @@ One-time Vercel dashboard setup:
    `vercel.ts` setting is the source-of-truth, but disconnecting Git in the
    dashboard is also safe.
 4. Run one stable release deployment, or manually alias the current stable
-   deployment, so `app.t3.codes` points at a deployment containing the router
+   deployment, so `code.pearcecodes.com` points at a deployment containing the router
    rules in `apps/web/vercel.ts`. Future stable releases keep this alias current.
 
 ## Nightly builds
 
 - Workflow: `.github/workflows/release.yml`
 - Triggers:
-  - scheduled every day at `09:00 UTC`
+  - scheduled checks every three hours
   - manual `workflow_dispatch` with `channel=nightly`
 - Runs the same desktop quality gates and artifact matrix as the tagged release flow.
 - Publishes a GitHub prerelease only:
@@ -94,7 +103,7 @@ One-time Vercel dashboard setup:
   - `make_latest` is always `false`
 - Uses the next stable patch version as the nightly base. For example, `0.0.17` produces nightlies on `0.0.18-nightly.*`.
 - Publishes Electron auto-update metadata to the dedicated `nightly` updater channel, so desktop users can opt into that track independently from stable.
-- Publishes the CLI package (`apps/server`, npm package `t3`) to the `nightly` npm dist-tag using the same nightly version.
+- Publishes the CLI package (`apps/server`, npm package `@pearcecodes/t3code`) to the `nightly` npm dist-tag using the same nightly version.
 - Does not commit version bumps back to `main`.
 
 ## Desktop auto-update notes
@@ -112,7 +121,7 @@ One-time Vercel dashboard setup:
   - set `T3CODE_DESKTOP_UPDATE_GITHUB_TOKEN` (or `GH_TOKEN`) in the desktop app runtime environment.
   - the app forwards it as an `Authorization: Bearer <token>` request header for updater HTTP calls.
 - Required release assets for updater:
-  - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
+  - platform installers (`.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
   - channel metadata: `latest*.yml` for stable releases, `nightly*.yml` for nightly releases
   - `*.blockmap` files (used for differential downloads)
 - macOS metadata note:
@@ -124,9 +133,13 @@ One-time Vercel dashboard setup:
 The workflow publishes the CLI with `npm publish` from `apps/server` after bumping
 the package version to the release tag version.
 
+The source workspace package is intentionally still named `t3` so Effect
+deterministic service keys remain stable. During release, `apps/server/scripts/cli.ts`
+writes a publish-only package manifest named `@pearcecodes/t3code`.
+
 Checklist:
 
-1. Confirm npm org/user owns package `t3` (or rename package first if needed).
+1. Confirm the npm org owns package `@pearcecodes/t3code`.
 2. In npm package settings, configure Trusted Publisher:
    - Provider: GitHub Actions
    - Repository: this repo
@@ -136,8 +149,8 @@ Checklist:
 4. Create release tag `vX.Y.Z` and push; workflow will:
    - set `apps/server/package.json` version to `X.Y.Z`
    - build web + server
-   - run `npm publish --access public --tag latest`
-5. Nightly runs from the same workflow file publish with `npm publish --access public --tag nightly`.
+   - run `npm publish --access public --tag latest --provenance`
+5. Nightly runs from the same workflow file publish with `npm publish --access public --tag nightly --provenance`.
 
 ## 1) Dry-run release without signing
 
@@ -181,31 +194,11 @@ Notes:
 - `APPLE_API_KEY` is stored as raw key text in secrets.
 - The workflow writes it to a temporary `AuthKey_<id>.p8` file at runtime.
 
-## 3) Azure Trusted Signing setup (Windows)
+## 3) Windows signing
 
-Required secrets used by the workflow:
-
-- `AZURE_TENANT_ID`
-- `AZURE_CLIENT_ID`
-- `AZURE_CLIENT_SECRET`
-- `AZURE_TRUSTED_SIGNING_ENDPOINT`
-- `AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`
-- `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME`
-- `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME`
-
-Checklist:
-
-1. Create Azure Trusted Signing account and certificate profile.
-2. Record ATS values:
-   - Endpoint
-   - Account name
-   - Certificate profile name
-   - Publisher name
-3. Create/choose an Entra app registration (service principal).
-4. Grant service principal permissions required by Trusted Signing.
-5. Create a client secret for the service principal.
-6. Add Azure secrets listed above in GitHub Actions secrets.
-7. Re-run a tag release and confirm Windows installer is signed.
+Windows builds are disabled for this fork's P1 release workflow. If Windows
+distribution is re-enabled later, restore the Windows matrix entry and configure
+Azure Trusted Signing secrets in GitHub Actions.
 
 ## 4) Ongoing release checklist
 
@@ -223,8 +216,6 @@ Checklist:
 
 - macOS build unsigned when expected signed:
   - Check all Apple secrets are populated and non-empty.
-- Windows build unsigned when expected signed:
-  - Check all Azure ATS and auth secrets are populated and non-empty.
 - Build fails with signing error:
   - Retry with secrets removed to confirm unsigned path still works.
   - Re-check certificate/profile names and tenant/client credentials.

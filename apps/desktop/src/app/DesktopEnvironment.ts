@@ -199,7 +199,7 @@ const makeDesktopEnvironment = Effect.fn("desktop.environment.make")(function* (
     otlpExportIntervalMs: config.otlpExportIntervalMs,
     branding,
     displayName,
-    appUserModelId: isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
+    appUserModelId: isDevelopment ? "com.pearcecodes.t3code.dev" : "com.pearcecodes.t3code",
     linuxDesktopEntryName: isDevelopment ? "t3code-dev.desktop" : "t3code.desktop",
     linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
     userDataDirName,

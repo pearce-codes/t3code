@@ -568,7 +568,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   mockUpdateServerPort: number | undefined,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: "com.t3tools.t3code",
+    appId: "com.pearcecodes.t3code",
     productName: resolveDesktopProductName(version),
     artifactName: "T3-Code-${version}-${arch}.${ext}",
     directories: {

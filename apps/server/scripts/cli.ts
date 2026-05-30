@@ -20,6 +20,8 @@ import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import rootPackageJson from "../../../package.json" with { type: "json" };
 import serverPackageJson from "../package.json" with { type: "json" };
 
+const PublishedPackageName = "@pearcecodes/t3code";
+
 interface PackageJson {
   name: string;
   repository: {
@@ -216,7 +218,7 @@ const publishCmd = Command.make(
         Effect.gen(function* () {
           const version = Option.getOrElse(config.appVersion, () => serverPackageJson.version);
           const pkg: PackageJson = {
-            name: serverPackageJson.name,
+            name: PublishedPackageName,
             repository: serverPackageJson.repository,
             bin: serverPackageJson.bin,
             type: serverPackageJson.type,
