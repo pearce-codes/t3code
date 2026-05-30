@@ -8,7 +8,7 @@ signing when Apple credentials are present, and npm publishing under the
 
 ### GitHub
 
-- Repository: `Pearcekieser/t3code`
+- Repository: `pearce-codes/t3code`
 - Keep the repository public so GitHub Releases can be used directly by
   `electron-updater`.
 - Enable GitHub Actions for the fork.
@@ -35,7 +35,7 @@ published package name to `@pearcecodes/t3code` immediately before `npm publish`
 Configure npm trusted publishing for `@pearcecodes/t3code`:
 
 - Provider: GitHub Actions
-- Repository: `Pearcekieser/t3code`
+- Repository: `pearce-codes/t3code`
 - Workflow file: `.github/workflows/release.yml`
 
 The npm publish job intentionally uses a GitHub-hosted runner, because npm
