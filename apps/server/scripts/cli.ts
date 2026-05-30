@@ -20,6 +20,8 @@ import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
 import serverPackageJson from "../package.json" with { type: "json" };
 
+const PublishedPackageName = "@pearcecodes/t3code";
+
 interface PackageJson {
   name: string;
   repository: {
@@ -257,7 +259,7 @@ const publishCmd = Command.make(
           const workspaceCatalog = workspaceConfig.catalog ?? {};
           const workspaceOverrides = workspaceConfig.overrides ?? {};
           const pkg: PackageJson = {
-            name: serverPackageJson.name,
+            name: PublishedPackageName,
             repository: serverPackageJson.repository,
             bin: serverPackageJson.bin,
             type: serverPackageJson.type,
