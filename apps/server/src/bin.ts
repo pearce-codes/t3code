@@ -41,6 +41,7 @@ const connectUnavailableCommand = Command.make("connect", {
       }),
     ),
   ),
+
 );
 
 export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>

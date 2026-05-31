@@ -185,6 +185,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),
     "applications",
   );
+
   const resourcesPath = input.resourcesPath;
 
   return DesktopEnvironment.of({
@@ -225,10 +226,12 @@ const make = Effect.fn("desktop.environment.make")(function* (
     branding,
     displayName,
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
+      isDevelopment ? "com.pearcecodes.pearcecodes.dev" : "com.pearcecodes.pearcecodes",
     ),
-    linuxDesktopEntryName: isDevelopment ? "t3code-dev.desktop" : "t3code.desktop",
-    linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
+    linuxDesktopEntryName: isDevelopment
+      ? "pearce-codes-dev.desktop"
+      : "pearce-codes.desktop",
+    linuxWmClass: isDevelopment ? "pearce-codes-dev" : "pearce-codes",
     linuxApplicationsDir,
     appImagePath: config.appImagePath,
     userDataDirName,
