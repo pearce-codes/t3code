@@ -31,6 +31,7 @@ import {
   CheckIcon,
   CircleAlertIcon,
   EyeIcon,
+  GitBranchIcon,
   GlobeIcon,
   HammerIcon,
   type LucideIcon,
@@ -95,6 +96,7 @@ interface TimelineRowSharedState {
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
   onRevertUserMessage: (messageId: MessageId) => void;
+  onBranchAssistantMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
 }
@@ -128,6 +130,7 @@ interface MessagesTimelineProps {
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
+  onBranchAssistantMessage: (messageId: MessageId) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
@@ -157,6 +160,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenTurnDiff,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
+  onBranchAssistantMessage,
   isRevertingCheckpoint,
   onImageExpand,
   activeThreadEnvironmentId,
@@ -229,6 +233,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       activeThreadEnvironmentId,
       onRevertUserMessage,
+      onBranchAssistantMessage,
       onImageExpand,
       onOpenTurnDiff,
     }),
@@ -241,6 +246,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       activeThreadEnvironmentId,
       onRevertUserMessage,
+      onBranchAssistantMessage,
       onImageExpand,
       onOpenTurnDiff,
     ],
@@ -455,7 +461,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
               )
             )}
           </p>
-          <AssistantCopyButton row={row} />
+          <AssistantMessageActions row={row} />
         </div>
       </div>
     </>
@@ -474,25 +480,50 @@ function AssistantCompletionDivider({ completionSummary }: { completionSummary: 
   );
 }
 
-function AssistantCopyButton({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
+function AssistantMessageActions({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
+  const ctx = use(TimelineRowCtx);
   const assistantCopyState = resolveAssistantMessageCopyState({
     text: row.message.text ?? null,
     showCopyButton: row.showAssistantCopyButton,
     streaming: row.assistantCopyStreaming,
   });
+  const showBranchButton = row.showAssistantCopyButton && !row.assistantCopyStreaming;
 
-  if (!assistantCopyState.visible) {
+  if (!assistantCopyState.visible && !showBranchButton) {
     return null;
   }
 
   return (
-    <div className="flex items-center opacity-0 transition-opacity duration-200  group-hover/assistant:opacity-100">
-      <MessageCopyButton
-        text={assistantCopyState.text ?? ""}
-        size="icon-xs"
-        variant="outline"
-        className="border-border/50 bg-background/35 text-muted-foreground/45 shadow-none hover:border-border/70 hover:bg-background/55 hover:text-muted-foreground/70"
-      />
+    <div className="flex items-center gap-1 opacity-0 transition-opacity duration-200 group-hover/assistant:opacity-100">
+      {assistantCopyState.visible ? (
+        <MessageCopyButton
+          text={assistantCopyState.text ?? ""}
+          size="icon-xs"
+          variant="outline"
+          className="border-border/50 bg-background/35 text-muted-foreground/45 shadow-none hover:border-border/70 hover:bg-background/55 hover:text-muted-foreground/70"
+        />
+      ) : null}
+      {showBranchButton ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                aria-label="Branch from message"
+                onClick={() => ctx.onBranchAssistantMessage(row.message.id)}
+                type="button"
+                size="icon-xs"
+                variant="outline"
+                className="border-border/50 bg-background/35 text-muted-foreground/45 shadow-none hover:border-border/70 hover:bg-background/55 hover:text-muted-foreground/70"
+              />
+            }
+          >
+            <GitBranchIcon className="size-3" />
+          </TooltipTrigger>
+          <TooltipPopup>
+            <p>Branch from this message</p>
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
     </div>
   );
 }

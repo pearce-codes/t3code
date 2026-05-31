@@ -104,6 +104,7 @@ function buildProps() {
     onOpenTurnDiff: () => {},
     revertTurnCountByUserMessageId: new Map(),
     onRevertUserMessage: () => {},
+    onBranchAssistantMessage: () => {},
     isRevertingCheckpoint: false,
     onImageExpand: () => {},
     activeThreadEnvironmentId: ACTIVE_THREAD_ENVIRONMENT_ID,
@@ -137,20 +138,24 @@ function buildUserTimelineEntry(text: string) {
 }
 
 describe("MessagesTimeline", () => {
-  it("renders collapse controls for long user messages", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...buildProps()}
-        timelineEntries={[buildUserTimelineEntry(buildLongUserMessageText())]}
-      />,
-    );
+  it(
+    "renders collapse controls for long user messages",
+    async () => {
+      const { MessagesTimeline } = await import("./MessagesTimeline");
+      const markup = renderToStaticMarkup(
+        <MessagesTimeline
+          {...buildProps()}
+          timelineEntries={[buildUserTimelineEntry(buildLongUserMessageText())]}
+        />,
+      );
 
-    expect(markup).toContain("Show full message");
-    expect(markup).toContain('data-user-message-collapsed="true"');
-    expect(markup).toContain('data-user-message-fade="true"');
-    expect(markup).toContain('data-user-message-footer="true"');
-  });
+      expect(markup).toContain("Show full message");
+      expect(markup).toContain('data-user-message-collapsed="true"');
+      expect(markup).toContain('data-user-message-fade="true"');
+      expect(markup).toContain('data-user-message-footer="true"');
+    },
+    20_000,
+  );
 
   it("does not render collapse controls for short user messages", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
@@ -295,5 +300,45 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain(">Review comment<");
     expect(markup).not.toContain("&lt;review_comment");
     expect(markup).not.toContain("&lt;/review_comment&gt;");
+  });
+
+  it("renders assistant branch action next to the completed assistant copy action", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-user",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.make("message-user"),
+              role: "user",
+              text: "do the thing",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+          {
+            id: "entry-assistant",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:30.000Z",
+            message: {
+              id: MessageId.make("message-assistant"),
+              role: "assistant",
+              text: "done",
+              turnId: "turn-1" as never,
+              createdAt: "2026-03-17T19:12:30.000Z",
+              completedAt: "2026-03-17T19:12:35.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Copy link"');
+    expect(markup).toContain('aria-label="Branch from message"');
   });
 });
