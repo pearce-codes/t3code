@@ -152,7 +152,7 @@ export const AuthBrowserSessionResult = Schema.Struct({
   authenticated: Schema.Literal(true),
   scopes: AuthEnvironmentScopes,
   sessionMethod: ServerAuthSessionMethod,
-  expiresAt: Schema.DateTimeUtc,
+  expiresAt: Schema.DateTimeUtcFromString,
 });
 export type AuthBrowserSessionResult = typeof AuthBrowserSessionResult.Type;
 
@@ -195,7 +195,7 @@ export type AuthAccessTokenResult = typeof AuthAccessTokenResult.Type;
 
 export const AuthWebSocketTicketResult = Schema.Struct({
   ticket: TrimmedNonEmptyString,
-  expiresAt: Schema.DateTimeUtc,
+  expiresAt: Schema.DateTimeUtcFromString,
 });
 export type AuthWebSocketTicketResult = typeof AuthWebSocketTicketResult.Type;
 
@@ -203,7 +203,7 @@ export const AuthPairingCredentialResult = Schema.Struct({
   id: TrimmedNonEmptyString,
   credential: TrimmedNonEmptyString,
   label: Schema.optionalKey(TrimmedNonEmptyString),
-  expiresAt: Schema.DateTimeUtc,
+  expiresAt: Schema.DateTimeUtcFromString,
 });
 export type AuthPairingCredentialResult = typeof AuthPairingCredentialResult.Type;
 
@@ -213,8 +213,8 @@ export const AuthPairingLink = Schema.Struct({
   scopes: AuthEnvironmentScopes,
   subject: TrimmedNonEmptyString,
   label: Schema.optionalKey(TrimmedNonEmptyString),
-  createdAt: Schema.DateTimeUtc,
-  expiresAt: Schema.DateTimeUtc,
+  createdAt: Schema.DateTimeUtcFromString,
+  expiresAt: Schema.DateTimeUtcFromString,
 });
 export type AuthPairingLink = typeof AuthPairingLink.Type;
 
@@ -234,9 +234,9 @@ export const AuthClientSession = Schema.Struct({
   scopes: AuthEnvironmentScopes,
   method: ServerAuthSessionMethod,
   client: AuthClientMetadata,
-  issuedAt: Schema.DateTimeUtc,
-  expiresAt: Schema.DateTimeUtc,
-  lastConnectedAt: Schema.NullOr(Schema.DateTimeUtc),
+  issuedAt: Schema.DateTimeUtcFromString,
+  expiresAt: Schema.DateTimeUtcFromString,
+  lastConnectedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   connected: Schema.Boolean,
   current: Schema.Boolean,
 });
@@ -339,6 +339,6 @@ export const AuthSessionState = Schema.Struct({
   auth: ServerAuthDescriptor,
   scopes: Schema.optionalKey(AuthEnvironmentScopes),
   sessionMethod: Schema.optionalKey(ServerAuthSessionMethod),
-  expiresAt: Schema.optionalKey(Schema.DateTimeUtc),
+  expiresAt: Schema.optionalKey(Schema.DateTimeUtcFromString),
 });
 export type AuthSessionState = typeof AuthSessionState.Type;
