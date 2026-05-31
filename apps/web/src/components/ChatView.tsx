@@ -105,7 +105,14 @@ import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
-import { ChevronDownIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  ChevronUpIcon,
+  MessageSquareTextIcon,
+  Trash2Icon,
+  TriangleAlertIcon,
+  WifiOffIcon,
+} from "lucide-react";
 import { cn, randomUUID } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
@@ -201,6 +208,7 @@ const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+const EMPTY_QUEUED_USER_MESSAGES: QueuedUserMessage[] = [];
 type EnvironmentUnavailableState = {
   readonly environmentId: EnvironmentId;
   readonly label: string;
@@ -605,6 +613,124 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
   );
 });
 
+type ComposerSendContext = ReturnType<ChatComposerHandle["getSendContext"]>;
+
+type QueuedUserMessageStatus = "queued" | "sending" | "failed";
+
+interface QueuedUserMessage {
+  id: string;
+  createdAt: string;
+  prompt: string;
+  images: ComposerImageAttachment[];
+  terminalContexts: TerminalContextDraft[];
+  sendContext: Omit<ComposerSendContext, "prompt" | "images" | "terminalContexts">;
+  runtimeMode: RuntimeMode;
+  interactionMode: ProviderInteractionMode;
+  status: QueuedUserMessageStatus;
+  error: string | null;
+}
+
+function QueuedUserMessagesPanel(props: {
+  messages: QueuedUserMessage[];
+  expanded: boolean;
+  onToggleExpanded: () => void;
+  onUpdatePrompt: (messageId: string, prompt: string) => void;
+  onRetry: (messageId: string) => void;
+  onDelete: (messageId: string) => void;
+}) {
+  if (props.messages.length === 0) {
+    return null;
+  }
+
+  const firstMessage = props.messages[0];
+  const summary =
+    props.messages.length === 1
+      ? firstMessage?.status === "sending"
+        ? "Sending queued message"
+        : firstMessage?.status === "failed"
+          ? "Queued message needs attention"
+          : "1 queued message"
+      : `${props.messages.length} queued messages`;
+  const SummaryIcon = props.expanded ? ChevronUpIcon : ChevronDownIcon;
+
+  return (
+    <div className="mb-2 rounded-md border border-border/70 bg-card/95 text-sm shadow-sm">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
+        onClick={props.onToggleExpanded}
+        aria-expanded={props.expanded}
+      >
+        <span className="flex min-w-0 items-center gap-2 font-medium text-foreground">
+          <MessageSquareTextIcon className="size-4 shrink-0 text-muted-foreground" />
+          <span className="truncate">{summary}</span>
+        </span>
+        <SummaryIcon className="size-4 shrink-0 text-muted-foreground" />
+      </button>
+
+      {props.expanded ? (
+        <div className="grid gap-2 border-border/70 border-t px-3 py-2">
+          {props.messages.map((message, index) => {
+            const attachmentLabel =
+              message.images.length === 0
+                ? null
+                : `${message.images.length} image${message.images.length === 1 ? "" : "s"}`;
+            return (
+              <div
+                key={message.id}
+                className="grid gap-2 rounded-md border border-border/60 bg-background/70 p-2"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-muted-foreground text-xs">
+                    {message.status === "sending"
+                      ? "Sending"
+                      : message.status === "failed"
+                        ? "Failed"
+                        : `Queued #${index + 1}`}
+                    {attachmentLabel ? ` · ${attachmentLabel}` : ""}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    {message.status === "failed" ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2"
+                        onClick={() => props.onRetry(message.id)}
+                      >
+                        Retry
+                      </Button>
+                    ) : null}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      className="size-7 text-muted-foreground hover:text-foreground"
+                      onClick={() => props.onDelete(message.id)}
+                      aria-label="Delete queued message"
+                    >
+                      <Trash2Icon className="size-3.5" />
+                    </Button>
+                  </div>
+                </div>
+                <textarea
+                  className="min-h-16 resize-y rounded border border-border/60 bg-transparent px-2 py-1.5 text-sm leading-relaxed outline-none focus:border-ring"
+                  value={message.prompt}
+                  disabled={message.status === "sending"}
+                  onChange={(event) => props.onUpdatePrompt(message.id, event.currentTarget.value)}
+                />
+                {message.error ? (
+                  <p className="text-destructive text-xs leading-5">{message.error}</p>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function ChatView(props: ChatViewProps) {
   const {
     environmentId,
@@ -690,6 +816,14 @@ export default function ChatView(props: ChatViewProps) {
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
+  const [queuedUserMessagesByThreadKey, setQueuedUserMessagesByThreadKey] = useState<
+    Record<string, QueuedUserMessage[]>
+  >({});
+  const [queuedUserMessagesExpanded, setQueuedUserMessagesExpanded] = useState(false);
+  const queuedUserMessagesByThreadKeyRef = useRef(queuedUserMessagesByThreadKey);
+  queuedUserMessagesByThreadKeyRef.current = queuedUserMessagesByThreadKey;
+  const activeQueuedUserMessages =
+    queuedUserMessagesByThreadKey[routeThreadKey] ?? EMPTY_QUEUED_USER_MESSAGES;
   const [localDraftErrorsByDraftId, setLocalDraftErrorsByDraftId] = useState<
     Record<string, string | null>
   >({});
@@ -1403,8 +1537,70 @@ export default function ChatView(props: ChatViewProps) {
       for (const message of optimisticUserMessagesRef.current) {
         revokeUserMessagePreviewUrls(message);
       }
+      for (const messages of Object.values(queuedUserMessagesByThreadKeyRef.current)) {
+        for (const message of messages) {
+          for (const image of message.images) {
+            revokeBlobPreviewUrl(image.previewUrl);
+          }
+        }
+      }
     };
   }, [clearAttachmentPreviewHandoffs]);
+  const setActiveQueuedUserMessages = useCallback(
+    (updater: (messages: QueuedUserMessage[]) => QueuedUserMessage[] | null | undefined) => {
+      setQueuedUserMessagesByThreadKey((existing) => {
+        const current = existing[routeThreadKey] ?? [];
+        const nextMessages = updater(current);
+        if (!nextMessages) {
+          return existing;
+        }
+        const next = { ...existing };
+        if (nextMessages.length === 0) {
+          delete next[routeThreadKey];
+        } else {
+          next[routeThreadKey] = nextMessages;
+        }
+        return next;
+      });
+    },
+    [routeThreadKey],
+  );
+  const deleteQueuedUserMessage = useCallback(
+    (messageId: string) => {
+      setActiveQueuedUserMessages((messages) => {
+        const removed = messages.find((message) => message.id === messageId);
+        if (removed) {
+          for (const image of removed.images) {
+            revokeBlobPreviewUrl(image.previewUrl);
+          }
+        }
+        return messages.filter((message) => message.id !== messageId);
+      });
+    },
+    [setActiveQueuedUserMessages],
+  );
+  const updateQueuedUserMessagePrompt = useCallback(
+    (messageId: string, prompt: string) => {
+      setActiveQueuedUserMessages((messages) =>
+        messages.map((message) =>
+          message.id === messageId
+            ? { ...message, prompt, status: "queued", error: null }
+            : message,
+        ),
+      );
+    },
+    [setActiveQueuedUserMessages],
+  );
+  const retryQueuedUserMessage = useCallback(
+    (messageId: string) => {
+      setActiveQueuedUserMessages((messages) =>
+        messages.map((message) =>
+          message.id === messageId ? { ...message, status: "queued", error: null } : message,
+        ),
+      );
+    },
+    [setActiveQueuedUserMessages],
+  );
   const handoffAttachmentPreviews = useCallback((messageId: MessageId, previewUrls: string[]) => {
     if (previewUrls.length === 0) return;
 
@@ -2611,7 +2807,10 @@ export default function ChatView(props: ChatViewProps) {
     ],
   );
 
-  const onSend = async (e?: { preventDefault: () => void }) => {
+  const onSend = async (
+    e?: { preventDefault: () => void },
+    options?: { queueRequested?: boolean },
+  ) => {
     e?.preventDefault();
     const api = readEnvironmentApi(environmentId);
     if (
@@ -2636,6 +2835,7 @@ export default function ChatView(props: ChatViewProps) {
       selectedModel: ctxSelectedModel,
       selectedProviderModels: ctxSelectedProviderModels,
       selectedPromptEffort: ctxSelectedPromptEffort,
+      selectedModelOptionsForDispatch: ctxSelectedModelOptionsForDispatch,
       selectedModelSelection: ctxSelectedModelSelection,
     } = sendCtx;
     const promptForSend = promptRef.current;
@@ -2649,6 +2849,51 @@ export default function ChatView(props: ChatViewProps) {
       imageCount: composerImages.length,
       terminalContexts: composerTerminalContexts,
     });
+    if (phase === "running") {
+      if (!options?.queueRequested || !hasSendableContent) {
+        return;
+      }
+      const queuedImages = [...composerImages];
+      const queuedTerminalContexts = [...sendableComposerTerminalContexts];
+      const queuedMessage: QueuedUserMessage = {
+        id: randomUUID(),
+        createdAt: new Date().toISOString(),
+        prompt: promptForSend,
+        images: queuedImages,
+        terminalContexts: queuedTerminalContexts,
+        sendContext: {
+          selectedProvider: ctxSelectedProvider,
+          selectedModel: ctxSelectedModel,
+          selectedProviderModels: ctxSelectedProviderModels,
+          selectedPromptEffort: ctxSelectedPromptEffort,
+          selectedModelOptionsForDispatch: ctxSelectedModelOptionsForDispatch,
+          selectedModelSelection: ctxSelectedModelSelection,
+        },
+        runtimeMode,
+        interactionMode,
+        status: "queued",
+        error: null,
+      };
+      setActiveQueuedUserMessages((messages) => [...messages, queuedMessage]);
+      setQueuedUserMessagesExpanded(true);
+      if (expiredTerminalContextCount > 0) {
+        const toastCopy = buildExpiredTerminalContextToastCopy(
+          expiredTerminalContextCount,
+          "omitted",
+        );
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: toastCopy.title,
+            description: toastCopy.description,
+          }),
+        );
+      }
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      return;
+    }
     if (showPlanFollowUpPrompt && activeProposedPlan) {
       const followUp = resolvePlanFollowUpSubmission({
         draftText: trimmed,
@@ -2913,6 +3158,203 @@ export default function ChatView(props: ChatViewProps) {
       resetLocalDispatch();
     }
   };
+
+  const dispatchQueuedUserMessage = useCallback(
+    async (queuedMessage: QueuedUserMessage) => {
+      const api = readEnvironmentApi(environmentId);
+      if (
+        !api ||
+        !activeThread ||
+        !activeProject ||
+        phase === "running" ||
+        isSendBusy ||
+        isConnecting ||
+        activeEnvironmentUnavailable ||
+        activePendingApproval ||
+        activePendingUserInput ||
+        sendInFlightRef.current
+      ) {
+        return;
+      }
+
+      const {
+        trimmedPrompt,
+        sendableTerminalContexts,
+        expiredTerminalContextCount,
+        hasSendableContent,
+      } = deriveComposerSendState({
+        prompt: queuedMessage.prompt,
+        imageCount: queuedMessage.images.length,
+        terminalContexts: queuedMessage.terminalContexts,
+      });
+      if (!hasSendableContent) {
+        setActiveQueuedUserMessages((messages) =>
+          messages.map((message) =>
+            message.id === queuedMessage.id
+              ? { ...message, status: "failed", error: "Queued message is empty." }
+              : message,
+          ),
+        );
+        return;
+      }
+
+      setActiveQueuedUserMessages((messages) =>
+        messages.map((message) =>
+          message.id === queuedMessage.id
+            ? { ...message, status: "sending", error: null }
+            : message,
+        ),
+      );
+      sendInFlightRef.current = true;
+      beginLocalDispatch();
+
+      const messageIdForSend = newMessageId();
+      const messageCreatedAt = new Date().toISOString();
+      const messageTextForSend = appendTerminalContextsToPrompt(
+        queuedMessage.prompt,
+        sendableTerminalContexts,
+      );
+      const outgoingMessageText = formatOutgoingPrompt({
+        provider: queuedMessage.sendContext.selectedProvider,
+        model: queuedMessage.sendContext.selectedModel,
+        models: queuedMessage.sendContext.selectedProviderModels,
+        effort: queuedMessage.sendContext.selectedPromptEffort,
+        text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
+      });
+      const optimisticAttachments = queuedMessage.images.map((image) => ({
+        type: "image" as const,
+        id: image.id,
+        name: image.name,
+        mimeType: image.mimeType,
+        sizeBytes: image.sizeBytes,
+        previewUrl: image.previewUrl,
+      }));
+      setOptimisticUserMessages((existing) => [
+        ...existing,
+        {
+          id: messageIdForSend,
+          role: "user",
+          text: outgoingMessageText,
+          ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+          createdAt: messageCreatedAt,
+          streaming: false,
+        },
+      ]);
+
+      try {
+        if (expiredTerminalContextCount > 0) {
+          const toastCopy = buildExpiredTerminalContextToastCopy(
+            expiredTerminalContextCount,
+            "omitted",
+          );
+          toastManager.add(
+            stackedThreadToast({
+              type: "warning",
+              title: toastCopy.title,
+              description: toastCopy.description,
+            }),
+          );
+        }
+        setThreadError(activeThread.id, null);
+        if (isServerThread) {
+          await persistThreadSettingsForNextTurn({
+            threadId: activeThread.id,
+            createdAt: messageCreatedAt,
+            ...(queuedMessage.sendContext.selectedModel
+              ? { modelSelection: queuedMessage.sendContext.selectedModelSelection }
+              : {}),
+            runtimeMode: queuedMessage.runtimeMode,
+            interactionMode: queuedMessage.interactionMode,
+          });
+        }
+
+        let firstComposerImageName: string | null = null;
+        if (queuedMessage.images.length > 0) {
+          firstComposerImageName = queuedMessage.images[0]?.name ?? null;
+        }
+        let titleSeed = trimmedPrompt;
+        if (!titleSeed) {
+          if (firstComposerImageName) {
+            titleSeed = `Image: ${firstComposerImageName}`;
+          } else if (sendableTerminalContexts.length > 0) {
+            titleSeed = formatTerminalContextLabel(sendableTerminalContexts[0]!);
+          } else {
+            titleSeed = "Queued message";
+          }
+        }
+        const title = truncate(titleSeed);
+        const turnAttachments = await Promise.all(
+          queuedMessage.images.map(async (image) => ({
+            type: "image" as const,
+            name: image.name,
+            mimeType: image.mimeType,
+            sizeBytes: image.sizeBytes,
+            dataUrl: await readFileAsDataUrl(image.file),
+          })),
+        );
+        await api.orchestration.dispatchCommand({
+          type: "thread.turn.start",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          message: {
+            messageId: messageIdForSend,
+            role: "user",
+            text: outgoingMessageText,
+            attachments: turnAttachments,
+          },
+          modelSelection: queuedMessage.sendContext.selectedModelSelection,
+          titleSeed: title,
+          runtimeMode: queuedMessage.runtimeMode,
+          interactionMode: queuedMessage.interactionMode,
+          createdAt: messageCreatedAt,
+        });
+        setActiveQueuedUserMessages((messages) =>
+          messages.filter((message) => message.id !== queuedMessage.id),
+        );
+      } catch (err) {
+        setOptimisticUserMessages((existing) =>
+          existing.filter((message) => message.id !== messageIdForSend),
+        );
+        const errorMessage = err instanceof Error ? err.message : "Failed to send queued message.";
+        setThreadError(activeThread.id, errorMessage);
+        setActiveQueuedUserMessages((messages) =>
+          messages.map((message) =>
+            message.id === queuedMessage.id
+              ? { ...message, status: "failed", error: errorMessage }
+              : message,
+          ),
+        );
+        resetLocalDispatch();
+      } finally {
+        sendInFlightRef.current = false;
+      }
+    },
+    [
+      activeEnvironmentUnavailable,
+      activePendingApproval,
+      activePendingUserInput,
+      activeProject,
+      activeThread,
+      beginLocalDispatch,
+      environmentId,
+      isConnecting,
+      isSendBusy,
+      isServerThread,
+      persistThreadSettingsForNextTurn,
+      phase,
+      resetLocalDispatch,
+      setActiveQueuedUserMessages,
+      setThreadError,
+    ],
+  );
+
+  useEffect(() => {
+    const nextQueuedMessage = activeQueuedUserMessages[0];
+    if (!nextQueuedMessage || nextQueuedMessage.status !== "queued") {
+      return;
+    }
+    void dispatchQueuedUserMessage(nextQueuedMessage);
+  }, [activeQueuedUserMessages, dispatchQueuedUserMessage]);
 
   const onInterrupt = async () => {
     const api = readEnvironmentApi(environmentId);
@@ -3665,6 +4107,14 @@ export default function ChatView(props: ChatViewProps) {
           >
             <div className="relative isolate">
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
+              <QueuedUserMessagesPanel
+                messages={activeQueuedUserMessages}
+                expanded={queuedUserMessagesExpanded}
+                onToggleExpanded={() => setQueuedUserMessagesExpanded((expanded) => !expanded)}
+                onUpdatePrompt={updateQueuedUserMessagePrompt}
+                onRetry={retryQueuedUserMessage}
+                onDelete={deleteQueuedUserMessage}
+              />
               <div className="relative z-10">
                 <ChatComposer
                   composerRef={composerRef}
