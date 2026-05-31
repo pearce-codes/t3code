@@ -1,7 +1,9 @@
-import type {
-  OrchestrationCommand,
-  OrchestrationEvent,
-  OrchestrationReadModel,
+import {
+  EventId,
+  MessageId,
+  type OrchestrationCommand,
+  type OrchestrationEvent,
+  type OrchestrationReadModel,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -19,6 +21,16 @@ import {
 import { projectEvent } from "./projector.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+const timestampOffsetIso = (baseIso: string, offsetMs: number) =>
+  DateTime.formatIso(DateTime.add(DateTime.makeUnsafe(baseIso), { milliseconds: offsetMs }));
+
+const sanitizeCopiedActivityPayload = (payload: unknown): unknown => {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return payload;
+  }
+  const { requestId: _requestId, ...rest } = payload as Record<string, unknown>;
+  return rest;
+};
 
 function withEventBase(
   input: Pick<OrchestrationCommand, "commandId"> & {
@@ -222,6 +234,171 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       };
+    }
+
+    case "thread.branch": {
+      const sourceThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.sourceThreadId,
+      });
+      yield* requireProject({
+        readModel,
+        command,
+        projectId: sourceThread.projectId,
+      });
+      yield* requireThreadAbsent({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+
+      const sourceMessageIndex =
+        command.sourceMessageId === undefined
+          ? -1
+          : sourceThread.messages.findIndex((message) => message.id === command.sourceMessageId);
+      if (command.sourceMessageId !== undefined && sourceMessageIndex === -1) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Message '${command.sourceMessageId}' does not exist on source thread '${command.sourceThreadId}'.`,
+        });
+      }
+
+      const sourceMessage =
+        sourceMessageIndex >= 0 ? sourceThread.messages[sourceMessageIndex] : undefined;
+      if (sourceMessage !== undefined && sourceMessage.role !== "assistant") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Message '${sourceMessage.id}' is not an assistant message and cannot be used as a branch point.`,
+        });
+      }
+      if (sourceMessage !== undefined && sourceMessage.streaming) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Assistant message '${sourceMessage.id}' is still streaming and cannot be used as a branch point.`,
+        });
+      }
+
+      const threadCreatedEvent: PlannedOrchestrationEvent = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.created",
+        payload: {
+          threadId: command.threadId,
+          projectId: sourceThread.projectId,
+          title: command.title ?? `${sourceThread.title} (Branched)`,
+          modelSelection: sourceThread.modelSelection,
+          runtimeMode: sourceThread.runtimeMode,
+          interactionMode: sourceThread.interactionMode,
+          branch: sourceThread.branch,
+          worktreePath: sourceThread.worktreePath,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+
+      const copiedThreadEvents: PlannedOrchestrationEvent[] = [];
+      const sourceMessages =
+        sourceMessageIndex >= 0
+          ? sourceThread.messages.slice(0, sourceMessageIndex + 1)
+          : sourceThread.messages;
+      const includedTurnIds = new Set(
+        sourceMessages.flatMap((message) => (message.turnId === null ? [] : [message.turnId])),
+      );
+      const sourceActivities =
+        sourceMessage === undefined
+          ? sourceThread.activities
+          : sourceThread.activities.filter((activity) => {
+              if (activity.turnId !== null && includedTurnIds.has(activity.turnId)) {
+                return true;
+              }
+              return activity.createdAt <= sourceMessage.updatedAt;
+            });
+      const sourceEntries = [
+        ...sourceMessages.map((message, sourceIndex) => ({
+          kind: "message" as const,
+          createdAt: message.createdAt,
+          sourceIndex,
+          message,
+        })),
+        ...sourceActivities.map((activity, sourceIndex) => ({
+          kind: "activity" as const,
+          createdAt: activity.createdAt,
+          sourceIndex,
+          activity,
+        })),
+      ].toSorted((left, right) => {
+        const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+        if (createdAtComparison !== 0) {
+          return createdAtComparison;
+        }
+        if (left.kind !== right.kind) {
+          return left.kind === "message" ? -1 : 1;
+        }
+        return left.sourceIndex - right.sourceIndex;
+      });
+
+      for (const [index, sourceEntry] of sourceEntries.entries()) {
+        const copiedAt = timestampOffsetIso(command.createdAt, index + 1);
+        const eventBase = withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: copiedAt,
+          commandId: command.commandId,
+        });
+        const copiedBase = {
+          eventId: eventBase.eventId,
+          aggregateKind: eventBase.aggregateKind,
+          aggregateId: eventBase.aggregateId,
+          occurredAt: eventBase.occurredAt,
+          commandId: eventBase.commandId,
+          causationEventId: threadCreatedEvent.eventId,
+          correlationId: eventBase.correlationId,
+          metadata: eventBase.metadata,
+        };
+
+        if (sourceEntry.kind === "message") {
+          copiedThreadEvents.push({
+            ...copiedBase,
+            type: "thread.message-sent",
+            payload: {
+              threadId: command.threadId,
+              messageId: MessageId.make(crypto.randomUUID()),
+              role: sourceEntry.message.role,
+              text: sourceEntry.message.text,
+              turnId: null,
+              streaming: false,
+              createdAt: copiedAt,
+              updatedAt: copiedAt,
+            },
+          });
+          continue;
+        }
+
+        copiedThreadEvents.push({
+          ...copiedBase,
+          type: "thread.activity-appended",
+          payload: {
+            threadId: command.threadId,
+            activity: {
+              id: EventId.make(crypto.randomUUID()),
+              tone: sourceEntry.activity.tone,
+              kind: sourceEntry.activity.kind,
+              summary: sourceEntry.activity.summary,
+              payload: sanitizeCopiedActivityPayload(sourceEntry.activity.payload),
+              turnId: null,
+              sequence: index,
+              createdAt: copiedAt,
+            },
+          },
+        });
+      }
+
+      return [threadCreatedEvent, ...copiedThreadEvents];
     }
 
     case "thread.delete": {
