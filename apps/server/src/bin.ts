@@ -13,8 +13,8 @@ import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
 
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 
-export const cli = Command.make("t3code", { ...sharedServerCommandFlags }).pipe(
-  Command.withDescription("Run the T3 Code server."),
+export const cli = Command.make("pearcecodes-t3-cli", { ...sharedServerCommandFlags }).pipe(
+  Command.withDescription("Run the Pearce Codes server."),
   Command.withHandler((flags) => runServerCommand(flags)),
   Command.withSubcommands([startCommand, serveCommand, authCommand, projectCommand]),
 );

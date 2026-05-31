@@ -8,7 +8,7 @@
     "directory": "apps/server"
   },
   "bin": {
-    "t3code": "./dist/bin.mjs"
+    "pearcecodes-t3-cli": "./dist/bin.mjs"
   },
   "files": [
     "dist"
