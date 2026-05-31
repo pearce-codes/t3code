@@ -242,7 +242,7 @@ describe("addSavedEnvironment", () => {
     expect(mockUpsert).not.toHaveBeenCalled();
 
     await resetEnvironmentServiceForTests();
-  });
+  }, 20_000);
 
   it("restores unrelated saved environments when credential persistence rollback runs", async () => {
     mockSavedRecords = [

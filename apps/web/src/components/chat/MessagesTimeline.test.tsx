@@ -119,24 +119,20 @@ function buildUserTimelineEntry(text: string) {
 }
 
 describe("MessagesTimeline", () => {
-  it(
-    "renders collapse controls for long user messages",
-    async () => {
-      const { MessagesTimeline } = await import("./MessagesTimeline");
-      const markup = renderToStaticMarkup(
-        <MessagesTimeline
-          {...buildProps()}
-          timelineEntries={[buildUserTimelineEntry(buildLongUserMessageText())]}
-        />,
-      );
+  it("renders collapse controls for long user messages", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry(buildLongUserMessageText())]}
+      />,
+    );
 
-      expect(markup).toContain("Show full message");
-      expect(markup).toContain('data-user-message-collapsed="true"');
-      expect(markup).toContain('data-user-message-fade="true"');
-      expect(markup).toContain('data-user-message-footer="true"');
-    },
-    20_000,
-  );
+    expect(markup).toContain("Show full message");
+    expect(markup).toContain('data-user-message-collapsed="true"');
+    expect(markup).toContain('data-user-message-fade="true"');
+    expect(markup).toContain('data-user-message-footer="true"');
+  }, 20_000);
 
   it("does not render collapse controls for short user messages", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
