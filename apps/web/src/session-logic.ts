@@ -156,6 +156,12 @@ export function isLatestTurnSettled(
   return true;
 }
 
+export function canAutoOpenPlanSidebarForLatestTurnState(
+  state: OrchestrationLatestTurn["state"] | null | undefined,
+): boolean {
+  return state === "running" || state === "completed";
+}
+
 export function deriveActiveWorkStartedAt(
   latestTurn: LatestTurnTiming | null,
   session: SessionActivityState | null,

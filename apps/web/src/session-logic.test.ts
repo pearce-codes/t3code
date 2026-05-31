@@ -8,6 +8,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  canAutoOpenPlanSidebarForLatestTurnState,
   deriveCompletionDividerBeforeEntryId,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
@@ -1453,6 +1454,16 @@ describe("isLatestTurnSettled", () => {
         null,
       ),
     ).toBe(false);
+  });
+});
+
+describe("canAutoOpenPlanSidebarForLatestTurnState", () => {
+  it("allows automatic expansion only for running or completed turns", () => {
+    expect(canAutoOpenPlanSidebarForLatestTurnState("running")).toBe(true);
+    expect(canAutoOpenPlanSidebarForLatestTurnState("completed")).toBe(true);
+    expect(canAutoOpenPlanSidebarForLatestTurnState("interrupted")).toBe(false);
+    expect(canAutoOpenPlanSidebarForLatestTurnState("error")).toBe(false);
+    expect(canAutoOpenPlanSidebarForLatestTurnState(null)).toBe(false);
   });
 });
 

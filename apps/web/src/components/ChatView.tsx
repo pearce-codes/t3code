@@ -58,6 +58,7 @@ import {
   deriveActivePlanState,
   findSidebarProposedPlan,
   findLatestProposedPlan,
+  canAutoOpenPlanSidebarForLatestTurnState,
   deriveWorkLogEntries,
   hasActionableProposedPlan,
   hasToolActivityForTurn,
@@ -2244,6 +2245,7 @@ export default function ChatView(props: ChatViewProps) {
   useEffect(() => {
     if (!autoOpenPlanSidebar) return;
     if (!activePlan) return;
+    if (!canAutoOpenPlanSidebarForLatestTurnState(activeLatestTurn?.state)) return;
     if (planSidebarOpen) return;
     const latestTurnId = activeLatestTurn?.turnId ?? null;
     if (latestTurnId && activePlan.turnId !== latestTurnId) return;
@@ -2252,6 +2254,7 @@ export default function ChatView(props: ChatViewProps) {
     setPlanSidebarOpen(true);
   }, [
     activePlan,
+    activeLatestTurn?.state,
     activeLatestTurn?.turnId,
     autoOpenPlanSidebar,
     planSidebarOpen,
