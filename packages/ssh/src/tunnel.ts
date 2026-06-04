@@ -5,6 +5,7 @@ import type {
 import * as NetService from "@t3tools/shared/Net";
 import { extractJsonObject, fromLenientJson } from "@t3tools/shared/schemaJson";
 import { satisfiesSemverRange } from "@t3tools/shared/semver";
+import { DEFAULT_LOCAL_SERVER_PORT } from "@t3tools/shared/serverPort";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -48,7 +49,7 @@ import {
   SshReadinessError,
 } from "./errors.ts";
 
-export const DEFAULT_REMOTE_PORT = 3773;
+export const DEFAULT_REMOTE_PORT = DEFAULT_LOCAL_SERVER_PORT;
 const REMOTE_PORT_SCAN_WINDOW = 200;
 const SSH_READY_TIMEOUT_MS = 20_000;
 const SSH_READY_PROBE_TIMEOUT_MS = 1_000;

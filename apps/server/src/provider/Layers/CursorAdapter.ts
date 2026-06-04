@@ -976,6 +976,15 @@ export function makeCursorAdapter(
         );
       });
 
+    const compactConversation: CursorAdapterShape["compactConversation"] = (_input) =>
+      Effect.fail(
+        new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "compactConversation",
+          issue: `Provider '${PROVIDER}' does not support manual context compaction.`,
+        }),
+      );
+
     const respondToRequest: CursorAdapterShape["respondToRequest"] = (
       threadId,
       requestId,
@@ -1069,6 +1078,7 @@ export function makeCursorAdapter(
       startSession,
       sendTurn,
       interruptTurn,
+      compactConversation,
       readThread,
       rollbackThread,
       respondToRequest,

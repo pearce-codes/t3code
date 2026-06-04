@@ -12,6 +12,14 @@ function asBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 
+function asPercentage(value: unknown): number | null {
+  const numeric = asFiniteNumber(value);
+  if (numeric === null) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, numeric));
+}
+
 type NullableContextWindowUsage = {
   readonly [Key in keyof ThreadTokenUsageSnapshot]: undefined extends ThreadTokenUsageSnapshot[Key]
     ? Exclude<ThreadTokenUsageSnapshot[Key], undefined> | null
@@ -25,6 +33,30 @@ export type ContextWindowSnapshot = NullableContextWindowUsage & {
   readonly updatedAt: string;
 };
 
+export function createPendingContextWindowSnapshot(updatedAt: string): ContextWindowSnapshot {
+  return {
+    usedTokens: 0,
+    totalProcessedTokens: null,
+    maxTokens: null,
+    remainingTokens: null,
+    usedPercentage: null,
+    remainingPercentage: null,
+    inputTokens: null,
+    cachedInputTokens: null,
+    outputTokens: null,
+    reasoningOutputTokens: null,
+    lastUsedTokens: null,
+    lastInputTokens: null,
+    lastCachedInputTokens: null,
+    lastOutputTokens: null,
+    lastReasoningOutputTokens: null,
+    toolUses: null,
+    durationMs: null,
+    compactsAutomatically: false,
+    updatedAt,
+  };
+}
+
 export function deriveLatestContextWindowSnapshot(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ContextWindowSnapshot | null {
@@ -36,19 +68,24 @@ export function deriveLatestContextWindowSnapshot(
 
     const payload = asRecord(activity.payload);
     const usedTokens = asFiniteNumber(payload?.usedTokens);
-    if (usedTokens === null || usedTokens <= 0) {
+    const explicitUsedPercentage = asPercentage(payload?.usedPercentage);
+    const hasKnownUsedTokens = usedTokens !== null && usedTokens > 0;
+    if (!hasKnownUsedTokens && explicitUsedPercentage === null) {
       continue;
     }
-
     const maxTokens = asFiniteNumber(payload?.maxTokens);
     const usedPercentage =
-      maxTokens !== null && maxTokens > 0 ? Math.min(100, (usedTokens / maxTokens) * 100) : null;
+      maxTokens !== null && maxTokens > 0 && usedTokens !== null
+        ? Math.min(100, (usedTokens / maxTokens) * 100)
+        : explicitUsedPercentage;
     const remainingTokens =
-      maxTokens !== null ? Math.max(0, Math.round(maxTokens - usedTokens)) : null;
+      maxTokens !== null && usedTokens !== null
+        ? Math.max(0, Math.round(maxTokens - usedTokens))
+        : null;
     const remainingPercentage = usedPercentage !== null ? Math.max(0, 100 - usedPercentage) : null;
 
     return {
-      usedTokens,
+      usedTokens: usedTokens ?? 0,
       totalProcessedTokens: asFiniteNumber(payload?.totalProcessedTokens),
       maxTokens,
       remainingTokens,

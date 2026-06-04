@@ -1,4 +1,5 @@
 import {
+  type EditorLaunchContext,
   type EnvironmentId,
   type MessageId,
   type ServerProviderSkill,
@@ -80,6 +81,7 @@ interface TimelineRowSharedState {
   timestampFormat: TimestampFormat;
   routeThreadKey: string;
   markdownCwd: string | undefined;
+  markdownLaunchContext?: EditorLaunchContext | undefined;
   resolvedTheme: "light" | "dark";
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
@@ -124,6 +126,7 @@ interface MessagesTimelineProps {
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
   markdownCwd: string | undefined;
+  markdownLaunchContext?: EditorLaunchContext | undefined;
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
@@ -154,6 +157,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onImageExpand,
   activeThreadEnvironmentId,
   markdownCwd,
+  markdownLaunchContext,
   resolvedTheme,
   timestampFormat,
   workspaceRoot,
@@ -217,6 +221,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       timestampFormat,
       routeThreadKey,
       markdownCwd,
+      markdownLaunchContext,
       resolvedTheme,
       workspaceRoot,
       skills,
@@ -230,6 +235,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       timestampFormat,
       routeThreadKey,
       markdownCwd,
+      markdownLaunchContext,
       resolvedTheme,
       workspaceRoot,
       skills,
@@ -425,6 +431,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         <ChatMarkdown
           text={messageText}
           cwd={ctx.markdownCwd}
+          launchContext={ctx.markdownLaunchContext}
           isStreaming={Boolean(row.message.streaming)}
           skills={ctx.skills}
         />
@@ -530,6 +537,7 @@ function ProposedPlanTimelineRow({
         planMarkdown={row.proposedPlan.planMarkdown}
         environmentId={ctx.activeThreadEnvironmentId}
         cwd={ctx.markdownCwd}
+        launchContext={ctx.markdownLaunchContext}
         workspaceRoot={ctx.workspaceRoot}
       />
     </div>

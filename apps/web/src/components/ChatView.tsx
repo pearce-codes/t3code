@@ -174,7 +174,6 @@ import {
   type LocalDispatchSnapshot,
   PullRequestDialogState,
   cloneComposerImageForRetry,
-  deriveLockedProvider,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
   resolveSendEnvMode,
@@ -192,6 +191,7 @@ import {
 } from "~/rpc/serverState";
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { retainThreadDetailSubscription } from "../environments/runtime/service";
+import { resolveDesktopSshEditorLaunchContext } from "../editorLaunchContext";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { Button } from "./ui/button";
 import {
@@ -442,6 +442,7 @@ interface PersistentThreadTerminalDrawerProps {
   threadId: ThreadId;
   visible: boolean;
   launchContext: PersistentTerminalLaunchContext | null;
+  editorLaunchContext: ReturnType<typeof resolveDesktopSshEditorLaunchContext> | null;
   focusRequestId: number;
   splitShortcutLabel: string | undefined;
   newShortcutLabel: string | undefined;
@@ -455,6 +456,7 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
   threadId,
   visible,
   launchContext,
+  editorLaunchContext,
   focusRequestId,
   splitShortcutLabel,
   newShortcutLabel,
@@ -591,6 +593,7 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
         cwd={cwd}
         worktreePath={effectiveWorktreePath}
         runtimeEnv={runtimeEnv}
+        editorLaunchContext={editorLaunchContext ?? undefined}
         visible={visible}
         height={terminalState.terminalHeight}
         terminalIds={terminalState.terminalIds}
@@ -820,6 +823,11 @@ export default function ChatView(props: ChatViewProps) {
     Record<string, QueuedUserMessage[]>
   >({});
   const [queuedUserMessagesExpanded, setQueuedUserMessagesExpanded] = useState(false);
+  const [queuedDispatchBarrier, setQueuedDispatchBarrier] = useState<{
+    threadKey: string;
+    messageId: MessageId;
+    createdAt: string;
+  } | null>(null);
   const queuedUserMessagesByThreadKeyRef = useRef(queuedUserMessagesByThreadKey);
   queuedUserMessagesByThreadKeyRef.current = queuedUserMessagesByThreadKey;
   const activeQueuedUserMessages =
@@ -1012,6 +1020,10 @@ export default function ChatView(props: ChatViewProps) {
     activeThread && activeThread.environmentId !== primaryEnvironmentId
       ? (savedEnvironmentRegistry[activeThread.environmentId] ?? null)
       : null;
+  const activeEditorLaunchContext = useMemo(
+    () => resolveDesktopSshEditorLaunchContext(activeSavedEnvironmentRecord?.desktopSsh),
+    [activeSavedEnvironmentRecord?.desktopSsh],
+  );
   const activeSavedEnvironmentRuntime = activeSavedEnvironmentRecord
     ? (savedEnvironmentRuntimeById[activeSavedEnvironmentRecord.environmentId] ?? null)
     : null;
@@ -1261,11 +1273,6 @@ export default function ChatView(props: ChatViewProps) {
     activeThread?.modelSelection.instanceId ??
     activeProject?.defaultModelSelection?.instanceId ??
     null;
-  const lockedProvider = deriveLockedProvider({
-    thread: activeThread,
-    selectedProvider: selectedProviderByThreadId,
-    threadProvider,
-  });
   const primaryServerConfig = useServerConfig();
   const activeEnvRuntimeState = useSavedEnvironmentRuntimeStore((s) =>
     activeThread?.environmentId ? s.byId[activeThread.environmentId] : null,
@@ -1396,7 +1403,7 @@ export default function ChatView(props: ChatViewProps) {
     providerStatuses,
     selectedProviderByThreadId ?? threadProvider ?? ProviderDriverKind.make("codex"),
   );
-  const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
+  const selectedProvider: ProviderDriverKind = unlockedSelectedProvider;
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const workLogEntries = useMemo(
@@ -1835,6 +1842,7 @@ export default function ChatView(props: ChatViewProps) {
   // than the default Codex's. Falls back to first-match-by-kind when no
   // saved instance id is available or the instance no longer exists.
   const activeProviderInstanceId =
+    composerActiveProvider ??
     activeThread?.session?.providerInstanceId ??
     activeThread?.modelSelection.instanceId ??
     activeProject?.defaultModelSelection?.instanceId ??
@@ -2813,15 +2821,7 @@ export default function ChatView(props: ChatViewProps) {
   ) => {
     e?.preventDefault();
     const api = readEnvironmentApi(environmentId);
-    if (
-      !api ||
-      !activeThread ||
-      isSendBusy ||
-      isConnecting ||
-      activeEnvironmentUnavailable ||
-      sendInFlightRef.current
-    )
-      return;
+    if (!api || !activeThread || isConnecting || activeEnvironmentUnavailable) return;
     if (activePendingProgress) {
       onAdvanceActivePendingUserInput();
       return;
@@ -2849,8 +2849,8 @@ export default function ChatView(props: ChatViewProps) {
       imageCount: composerImages.length,
       terminalContexts: composerTerminalContexts,
     });
-    if (phase === "running") {
-      if (!options?.queueRequested || !hasSendableContent) {
+    if (phase === "running" && options?.queueRequested) {
+      if (!hasSendableContent) {
         return;
       }
       const queuedImages = [...composerImages];
@@ -2875,7 +2875,6 @@ export default function ChatView(props: ChatViewProps) {
         error: null,
       };
       setActiveQueuedUserMessages((messages) => [...messages, queuedMessage]);
-      setQueuedUserMessagesExpanded(true);
       if (expiredTerminalContextCount > 0) {
         const toastCopy = buildExpiredTerminalContextToastCopy(
           expiredTerminalContextCount,
@@ -2894,6 +2893,8 @@ export default function ChatView(props: ChatViewProps) {
       composerRef.current?.resetCursorState();
       return;
     }
+    if (phase === "running" && sendInFlightRef.current) return;
+    if (phase !== "running" && (isSendBusy || sendInFlightRef.current)) return;
     if (showPlanFollowUpPrompt && activeProposedPlan) {
       const followUp = resolvePlanFollowUpSubmission({
         draftText: trimmed,
@@ -3292,6 +3293,11 @@ export default function ChatView(props: ChatViewProps) {
             dataUrl: await readFileAsDataUrl(image.file),
           })),
         );
+        setQueuedDispatchBarrier({
+          threadKey: routeThreadKey,
+          messageId: messageIdForSend,
+          createdAt: messageCreatedAt,
+        });
         await api.orchestration.dispatchCommand({
           type: "thread.turn.start",
           commandId: newCommandId(),
@@ -3317,6 +3323,9 @@ export default function ChatView(props: ChatViewProps) {
         );
         const errorMessage = err instanceof Error ? err.message : "Failed to send queued message.";
         setThreadError(activeThread.id, errorMessage);
+        setQueuedDispatchBarrier((barrier) =>
+          barrier?.messageId === messageIdForSend ? null : barrier,
+        );
         setActiveQueuedUserMessages((messages) =>
           messages.map((message) =>
             message.id === queuedMessage.id
@@ -3343,18 +3352,35 @@ export default function ChatView(props: ChatViewProps) {
       persistThreadSettingsForNextTurn,
       phase,
       resetLocalDispatch,
+      routeThreadKey,
       setActiveQueuedUserMessages,
       setThreadError,
     ],
   );
 
   useEffect(() => {
+    if (!queuedDispatchBarrier || queuedDispatchBarrier.threadKey !== routeThreadKey) {
+      return;
+    }
+    if (!latestTurnSettled || !activeLatestTurn?.requestedAt) {
+      return;
+    }
+    if (activeLatestTurn.requestedAt < queuedDispatchBarrier.createdAt) {
+      return;
+    }
+    setQueuedDispatchBarrier(null);
+  }, [activeLatestTurn?.requestedAt, latestTurnSettled, queuedDispatchBarrier, routeThreadKey]);
+
+  useEffect(() => {
+    if (queuedDispatchBarrier?.threadKey === routeThreadKey) {
+      return;
+    }
     const nextQueuedMessage = activeQueuedUserMessages[0];
     if (!nextQueuedMessage || nextQueuedMessage.status !== "queued") {
       return;
     }
     void dispatchQueuedUserMessage(nextQueuedMessage);
-  }, [activeQueuedUserMessages, dispatchQueuedUserMessage]);
+  }, [activeQueuedUserMessages, dispatchQueuedUserMessage, queuedDispatchBarrier, routeThreadKey]);
 
   const onInterrupt = async () => {
     const api = readEnvironmentApi(environmentId);
@@ -3817,29 +3843,6 @@ export default function ChatView(props: ChatViewProps) {
       // Look up the configured instance so model normalization and custom
       // model lookup stay scoped to that exact instance. Unknown instance ids
       // are rejected by returning early; the server remains authoritative too.
-      const entry = providerStatuses.find((snapshot) => snapshot.instanceId === instanceId);
-      const resolvedDriverKind = entry?.driver ?? null;
-      if (
-        lockedProvider !== null &&
-        resolvedDriverKind !== null &&
-        resolvedDriverKind !== lockedProvider
-      ) {
-        scheduleComposerFocus();
-        return;
-      }
-      if (lockedProvider !== null && activeThread.session?.providerInstanceId) {
-        const currentEntry = providerStatuses.find(
-          (snapshot) => snapshot.instanceId === activeThread.session?.providerInstanceId,
-        );
-        if (
-          currentEntry?.continuation?.groupKey &&
-          entry?.continuation?.groupKey &&
-          currentEntry.continuation.groupKey !== entry.continuation.groupKey
-        ) {
-          scheduleComposerFocus();
-          return;
-        }
-      }
       const resolvedModel = resolveAppModelSelectionForInstance(
         instanceId,
         settings,
@@ -3863,7 +3866,6 @@ export default function ChatView(props: ChatViewProps) {
     },
     [
       activeThread,
-      lockedProvider,
       scheduleComposerFocus,
       setComposerDraftModelSelection,
       setStickyComposerModelSelection,
@@ -4020,6 +4022,7 @@ export default function ChatView(props: ChatViewProps) {
           activeProjectName={activeProject?.name}
           isGitRepo={isGitRepo}
           openInCwd={gitCwd}
+          openInLaunchContext={activeEditorLaunchContext}
           activeProjectScripts={activeProject?.scripts}
           preferredScriptId={
             activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
@@ -4074,6 +4077,7 @@ export default function ChatView(props: ChatViewProps) {
               isRevertingCheckpoint={isRevertingCheckpoint}
               onImageExpand={onExpandTimelineImage}
               markdownCwd={gitCwd ?? undefined}
+              markdownLaunchContext={activeEditorLaunchContext}
               resolvedTheme={resolvedTheme}
               timestampFormat={timestampFormat}
               workspaceRoot={activeWorkspaceRoot}
@@ -4150,7 +4154,7 @@ export default function ChatView(props: ChatViewProps) {
                   planSidebarOpen={planSidebarOpen}
                   runtimeMode={runtimeMode}
                   interactionMode={interactionMode}
-                  lockedProvider={lockedProvider}
+                  lockedProvider={null}
                   providerStatuses={providerStatuses as ServerProvider[]}
                   activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
                   activeThreadModelSelection={activeThread?.modelSelection}
@@ -4257,6 +4261,9 @@ export default function ChatView(props: ChatViewProps) {
           visible={mountedThreadKey === activeThreadKey && terminalState.terminalOpen}
           launchContext={
             mountedThreadKey === activeThreadKey ? (activeTerminalLaunchContext ?? null) : null
+          }
+          editorLaunchContext={
+            mountedThreadKey === activeThreadKey ? (activeEditorLaunchContext ?? null) : null
           }
           focusRequestId={mountedThreadKey === activeThreadKey ? terminalFocusRequestId : 0}
           splitShortcutLabel={splitTerminalShortcutLabel ?? undefined}

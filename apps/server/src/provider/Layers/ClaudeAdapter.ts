@@ -3172,6 +3172,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     };
   });
 
+  const compactConversation: ClaudeAdapterShape["compactConversation"] = (input) =>
+    sendTurn({
+      threadId: input.threadId,
+      input: "/compact",
+    }).pipe(Effect.asVoid);
+
   const interruptTurn: ClaudeAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
     function* (threadId, _turnId) {
       const context = yield* requireSession(threadId);
@@ -3280,6 +3286,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     startSession,
     sendTurn,
     interruptTurn,
+    compactConversation,
     readThread,
     rollbackThread,
     respondToRequest,

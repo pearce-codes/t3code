@@ -475,6 +475,9 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
         sessions.clear();
       });
 
+    const compactConversation: ProviderAdapterShape<ProviderAdapterError>["compactConversation"] =
+      () => Effect.void;
+
     const adapter: ProviderAdapterShape<ProviderAdapterError> = {
       provider,
       capabilities: {
@@ -483,6 +486,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
       startSession,
       sendTurn,
       interruptTurn,
+      compactConversation,
       respondToRequest,
       respondToUserInput,
       stopSession,

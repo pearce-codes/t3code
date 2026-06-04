@@ -48,7 +48,11 @@ describe("ChatMarkdown", () => {
       await link.click();
 
       await vi.waitFor(() => {
-        expect(openInPreferredEditorMock).toHaveBeenCalledWith(expect.anything(), filePath);
+        expect(openInPreferredEditorMock).toHaveBeenCalledWith(
+          expect.anything(),
+          filePath,
+          undefined,
+        );
       });
     } finally {
       await screen.unmount();
@@ -70,7 +74,11 @@ describe("ChatMarkdown", () => {
       await link.click();
 
       await vi.waitFor(() => {
-        expect(openInPreferredEditorMock).toHaveBeenCalledWith(expect.anything(), `${filePath}:1`);
+        expect(openInPreferredEditorMock).toHaveBeenCalledWith(
+          expect.anything(),
+          `${filePath}:1`,
+          undefined,
+        );
       });
     } finally {
       await screen.unmount();
@@ -95,6 +103,7 @@ describe("ChatMarkdown", () => {
         expect(openInPreferredEditorMock).toHaveBeenCalledWith(
           expect.anything(),
           `${filePath}:1:7`,
+          undefined,
         );
       });
     } finally {

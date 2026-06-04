@@ -65,7 +65,7 @@ import type {
 import { EnvironmentId } from "./baseSchemas.ts";
 import { AuthBearerBootstrapResult, AuthSessionState, AuthWebSocketTokenResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
-import { EditorId } from "./editor.ts";
+import { EditorId, type EditorLaunchContext } from "./editor.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import type { ClientSettings, ServerSettings, ServerSettingsPatch } from "./settings.ts";
 import type {
@@ -439,7 +439,7 @@ export interface LocalApi {
     confirm: (message: string) => Promise<boolean>;
   };
   shell: {
-    openInEditor: (cwd: string, editor: EditorId) => Promise<void>;
+    openInEditor: (cwd: string, editor: EditorId, context?: EditorLaunchContext) => Promise<void>;
     openExternal: (url: string) => Promise<void>;
   };
   contextMenu: {

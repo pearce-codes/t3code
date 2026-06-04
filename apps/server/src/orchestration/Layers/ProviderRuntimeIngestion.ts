@@ -198,18 +198,49 @@ function assistantSegmentBaseKeyFromEvent(event: ProviderRuntimeEvent): string {
   return String(event.itemId ?? event.turnId ?? event.eventId);
 }
 
+function assistantSegmentBaseKeyForTurn(turnId: TurnId, baseKey: string): string {
+  return `turn:${turnId}:${baseKey}`;
+}
+
 function assistantSegmentMessageId(baseKey: string, segmentIndex: number): MessageId {
   return MessageId.make(
     segmentIndex === 0 ? `assistant:${baseKey}` : `assistant:${baseKey}:segment:${segmentIndex}`,
   );
 }
+
+function isMessageFromDifferentTurn(
+  message: OrchestrationMessage | undefined,
+  turnId: TurnId | undefined,
+): boolean {
+  return message !== undefined && turnId !== undefined && !sameId(message.turnId, turnId);
+}
+
+function shouldIgnoreUnscopedAssistantText(
+  event: ProviderRuntimeEvent,
+  turnId: TurnId | undefined,
+) {
+  return event.provider === "kiro" && turnId === undefined;
+}
 function buildContextWindowActivityPayload(
   event: ProviderRuntimeEvent,
 ): ThreadTokenUsageSnapshot | undefined {
-  if (event.type !== "thread.token-usage.updated" || event.payload.usage.usedTokens <= 0) {
+  if (event.type !== "thread.token-usage.updated") {
     return undefined;
   }
-  return event.payload.usage;
+  const usage = event.payload.usage;
+  if (usage.usedTokens > 0) {
+    return usage;
+  }
+  const usedPercentage = usage.usedPercentage;
+  if (
+    typeof usedPercentage === "number" &&
+    Number.isFinite(usedPercentage) &&
+    usedPercentage >= 0 &&
+    usedPercentage <= 100
+  ) {
+    return usage;
+  }
+  return undefined;
 }
 
 function normalizeRuntimeTurnState(
@@ -709,6 +740,22 @@ const make = Effect.gen(function* () {
   const clearAssistantSegmentStateForTurn = (threadId: ThreadId, turnId: TurnId) =>
     Cache.invalidate(assistantSegmentStateByTurnKey, providerTurnKey(threadId, turnId));
 
+  const resolveAssistantSegmentBaseKey = (input: {
+    threadId: ThreadId;
+    event: ProviderRuntimeEvent;
+    turnId: TurnId;
+  }) =>
+    Effect.gen(function* () {
+      const baseKey = assistantSegmentBaseKeyFromEvent(input.event);
+      const candidateMessageId = assistantSegmentMessageId(baseKey, 0);
+      const detailedThread = yield* resolveThreadDetail(input.threadId);
+      const existingMessage = findMessageById(detailedThread?.messages ?? [], candidateMessageId);
+
+      return isMessageFromDifferentTurn(existingMessage, input.turnId)
+        ? assistantSegmentBaseKeyForTurn(input.turnId, baseKey)
+        : baseKey;
+    });
+
   const getActiveAssistantMessageIdForTurn = (threadId: ThreadId, turnId: TurnId) =>
     getAssistantSegmentStateForTurn(threadId, turnId).pipe(
       Effect.map((state) =>
@@ -769,7 +816,11 @@ const make = Effect.gen(function* () {
       return yield* startAssistantSegmentForTurn({
         threadId: input.threadId,
         turnId: input.turnId,
-        baseKey: assistantSegmentBaseKeyFromEvent(input.event),
+        baseKey: yield* resolveAssistantSegmentBaseKey({
+          threadId: input.threadId,
+          event: input.event,
+          turnId: input.turnId,
+        }),
       });
     });
 
@@ -1324,6 +1375,9 @@ const make = Effect.gen(function* () {
 
       if (assistantDelta && assistantDelta.length > 0) {
         const turnId = toTurnId(event.turnId);
+        if (shouldIgnoreUnscopedAssistantText(event, turnId)) {
+          return;
+        }
         const assistantMessageId = yield* getOrCreateAssistantMessageId({
           threadId: thread.id,
           event,
@@ -1440,9 +1494,17 @@ const make = Effect.gen(function* () {
           : Option.none<MessageId>();
         const hasAssistantMessagesForTurn =
           turnId !== undefined ? hasAssistantMessageForTurn(messages, turnId) : false;
-        const assistantMessageId = Option.getOrElse(
-          activeAssistantMessageId,
-          () => assistantCompletion.messageId,
+        const completionMessageFromDifferentTurn = isMessageFromDifferentTurn(
+          findMessageById(messages, assistantCompletion.messageId),
+          turnId,
+        );
+        const assistantMessageId = Option.getOrElse(activeAssistantMessageId, () =>
+          completionMessageFromDifferentTurn && turnId !== undefined
+            ? assistantSegmentMessageId(
+                assistantSegmentBaseKeyForTurn(turnId, assistantSegmentBaseKeyFromEvent(event)),
+                0,
+              )
+            : assistantCompletion.messageId,
         );
         const existingAssistantMessage = findMessageById(messages, assistantMessageId);
         const shouldApplyFallbackCompletionText =
@@ -1453,8 +1515,13 @@ const make = Effect.gen(function* () {
           turnId !== undefined &&
           hasAssistantMessagesForTurn &&
           (assistantCompletion.fallbackText?.trim().length ?? 0) === 0;
+        const shouldSkipStaleCompletionCollision =
+          Option.isNone(activeAssistantMessageId) &&
+          turnId !== undefined &&
+          completionMessageFromDifferentTurn &&
+          (assistantCompletion.fallbackText?.trim().length ?? 0) === 0;
 
-        if (!shouldSkipRedundantCompletion) {
+        if (!shouldSkipRedundantCompletion && !shouldSkipStaleCompletionCollision) {
           if (turnId && Option.isNone(activeAssistantMessageId)) {
             yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
           }

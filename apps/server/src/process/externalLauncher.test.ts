@@ -239,6 +239,96 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
     }),
   );
 
+  it.effect("adds VS Code Remote-SSH arguments for ssh launch context", () =>
+    Effect.gen(function* () {
+      const vscodeLaunch = yield* resolveEditorLaunch(
+        {
+          cwd: "/home/pearce/workspace",
+          editor: "vscode",
+          context: {
+            remote: {
+              type: "ssh",
+              authority: "pearce@example.com",
+            },
+          },
+        },
+        "darwin",
+        { PATH: "" },
+      );
+      assert.deepEqual(vscodeLaunch, {
+        command: "code",
+        args: ["--remote", "ssh-remote+pearce@example.com", "/home/pearce/workspace"],
+      });
+
+      const vscodeGotoLaunch = yield* resolveEditorLaunch(
+        {
+          cwd: "/home/pearce/workspace/src/index.ts:12:4",
+          editor: "vscode",
+          context: {
+            remote: {
+              type: "ssh",
+              authority: "devbox",
+            },
+          },
+        },
+        "darwin",
+        { PATH: "" },
+      );
+      assert.deepEqual(vscodeGotoLaunch, {
+        command: "code",
+        args: [
+          "--remote",
+          "ssh-remote+devbox",
+          "--goto",
+          "/home/pearce/workspace/src/index.ts:12:4",
+        ],
+      });
+
+      const insidersLaunch = yield* resolveEditorLaunch(
+        {
+          cwd: "/home/pearce/workspace",
+          editor: "vscode-insiders",
+          context: {
+            remote: {
+              type: "ssh",
+              authority: "devbox",
+            },
+          },
+        },
+        "darwin",
+        { PATH: "" },
+      );
+      assert.deepEqual(insidersLaunch, {
+        command: "code-insiders",
+        args: ["--remote", "ssh-remote+devbox", "/home/pearce/workspace"],
+      });
+    }),
+  );
+
+  it.effect("rejects SSH launch context for editors without Remote-SSH support", () =>
+    Effect.gen(function* () {
+      const result = yield* resolveEditorLaunch(
+        {
+          cwd: "/home/pearce/workspace",
+          editor: "cursor",
+          context: {
+            remote: {
+              type: "ssh",
+              authority: "devbox",
+            },
+          },
+        },
+        "darwin",
+        { PATH: "" },
+      ).pipe(Effect.result);
+
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.equal(result.failure.message, "Cursor does not support SSH remote launch.");
+      }
+    }),
+  );
+
   it.effect("applies launch-style-specific navigation arguments", () =>
     Effect.gen(function* () {
       const lineOnly = yield* resolveEditorLaunch(

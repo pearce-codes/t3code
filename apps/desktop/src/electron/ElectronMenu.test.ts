@@ -96,6 +96,38 @@ describe("ElectronMenu", () => {
     }).pipe(Effect.provide(ElectronMenu.layer)),
   );
 
+  if (process.platform === "darwin") {
+    it.effect("marks destructive menu icons as macOS template images", () =>
+      Effect.gen(function* () {
+        const resizedIcon = {
+          isEmpty: vi.fn(() => false),
+          setTemplateImage: vi.fn(),
+        };
+        const sourceIcon = {
+          resize: vi.fn(() => resizedIcon),
+        };
+        createFromNamedImageMock.mockReturnValue(sourceIcon);
+        buildFromTemplateMock.mockImplementation(() => ({
+          popup: (options: Electron.PopupOptions) => {
+            options.callback?.();
+          },
+        }));
+
+        const electronMenu = yield* ElectronMenu.ElectronMenu;
+        yield* electronMenu.showContextMenu({
+          window: {} as Electron.BrowserWindow,
+          items: [{ id: "delete", label: "Delete", destructive: true }],
+          position: Option.none(),
+        });
+
+        assert.deepEqual(createFromNamedImageMock.mock.calls[0], ["trash"]);
+        assert.deepEqual(sourceIcon.resize.mock.calls[0], [{ width: 12, height: 12 }]);
+        assert.deepEqual(resizedIcon.setTemplateImage.mock.calls[0], [true]);
+        assert.equal(buildFromTemplateMock.mock.calls[0]?.[0][0].icon, resizedIcon);
+      }).pipe(Effect.provide(ElectronMenu.layer)),
+    );
+  }
+
   it.effect("defers popupTemplate side effects until the returned Effect runs", () =>
     Effect.gen(function* () {
       const popupMock = vi.fn();

@@ -1396,6 +1396,15 @@ export function makeOpenCodeAdapter(
       },
     );
 
+    const compactConversation: OpenCodeAdapterShape["compactConversation"] = (_input) =>
+      Effect.fail(
+        new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "compactConversation",
+          issue: `Provider '${PROVIDER}' does not support manual context compaction.`,
+        }),
+      );
+
     const stopAll: OpenCodeAdapterShape["stopAll"] = () =>
       Effect.gen(function* () {
         const contexts = [...sessions.values()];
@@ -1419,6 +1428,7 @@ export function makeOpenCodeAdapter(
       startSession,
       sendTurn,
       interruptTurn,
+      compactConversation,
       respondToRequest,
       respondToUserInput,
       stopSession,

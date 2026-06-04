@@ -16,13 +16,16 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderUserInputAnswers,
+  type ThreadTokenUsageSnapshot,
   RuntimeRequestId,
   type RuntimeMode,
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import { omitProviderCompactionProgressText } from "@t3tools/shared/providerCompaction";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -36,11 +39,12 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { collectUint8StreamText } from "../../stream/collectUint8StreamText.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -54,6 +58,7 @@ import {
   makeAcpPlanUpdatedEvent,
   makeAcpRequestOpenedEvent,
   makeAcpRequestResolvedEvent,
+  makeAcpTokenUsageUpdatedEvent,
   makeAcpToolCallEvent,
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
@@ -63,6 +68,7 @@ import {
   parsePermissionRequest,
 } from "../acp/AcpRuntimeModel.ts";
 import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
+import { isKiroContextCommand, parseKiroContextUsageText } from "../acp/KiroContextUsage.ts";
 import { applyKiroAcpModelSelection, makeKiroAcpRuntime } from "../acp/KiroAcpSupport.ts";
 import { type KiroAdapterShape } from "../Services/KiroAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -75,6 +81,8 @@ const KIRO_RESUME_VERSION = 1 as const;
 const ACP_PLAN_MODE_ALIASES = ["plan", "architect"];
 const ACP_IMPLEMENT_MODE_ALIASES = ["code", "agent", "default", "chat", "implement"];
 const ACP_APPROVAL_MODE_ALIASES = ["ask"];
+const KIRO_CONTEXT_REFRESH_TIMEOUT = Duration.seconds(10);
+const KIRO_CONTEXT_REFRESH_MAX_OUTPUT_BYTES = 512 * 1024;
 
 function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
   const result = encodeUnknownJsonStringExit(input);
@@ -109,14 +117,22 @@ interface PendingUserInput {
 
 interface KiroSessionContext {
   readonly threadId: ThreadId;
+  readonly cwd: string;
   session: ProviderSession;
   readonly scope: Scope.Closeable;
   readonly acp: AcpSessionRuntimeShape;
+  readonly contextRefreshCommand: string;
+  readonly contextRefreshEnvironment: NodeJS.ProcessEnv | undefined;
   notificationFiber: Fiber.Fiber<void, never> | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
   readonly turns: Array<{ id: TurnId; items: Array<unknown> }>;
+  readonly turnTextDeltas: Map<TurnId, string[]>;
   lastPlanFingerprint: string | undefined;
+  contextRefreshGeneration: number;
+  contextRefreshInFlight: boolean;
+  contextRefreshQueued: boolean;
+  latestContextRefreshTurnId: TurnId | undefined;
   activeTurnId: TurnId | undefined;
   stopped: boolean;
 }
@@ -242,17 +258,28 @@ function applyRequestedSessionConfiguration<E>(input: {
   }) => E;
 }): Effect.Effect<void, E> {
   return Effect.gen(function* () {
+    const hasExplicitAgentSelection =
+      input.modelSelection?.options?.some(
+        (selection) =>
+          selection.id === "agent" &&
+          typeof selection.value === "string" &&
+          selection.value.trim().length > 0,
+      ) ?? false;
     if (input.modelSelection) {
       yield* applyKiroAcpModelSelection({
         runtime: input.runtime,
         model: input.modelSelection.model,
         selections: input.modelSelection.options,
-        mapError: ({ cause }) =>
+        mapError: ({ cause, step }) =>
           input.mapError({
             cause,
-            method: "session/set_config_option",
+            method: step === "set-mode" ? "session/set_mode" : "session/set_config_option",
           }),
       });
+    }
+
+    if (hasExplicitAgentSelection) {
+      return;
     }
 
     const requestedModeId = resolveRequestedModeId({
@@ -264,7 +291,14 @@ function applyRequestedSessionConfiguration<E>(input: {
       return;
     }
 
-    void requestedModeId;
+    yield* input.runtime.setMode(requestedModeId).pipe(
+      Effect.mapError((cause) =>
+        input.mapError({
+          cause,
+          method: "session/set_mode",
+        }),
+      ),
+    );
   });
 }
 
@@ -282,6 +316,114 @@ function selectAutoApprovedPermissionOption(
   }
 
   return undefined;
+}
+
+function formatTranscriptContext(
+  messages: ReadonlyArray<{
+    readonly role: "user" | "assistant" | "system";
+    readonly text: string;
+  }>,
+): string | undefined {
+  const lines = messages.flatMap((message) => {
+    const text = message.text.trim();
+    if (!text) {
+      return [];
+    }
+    const label =
+      message.role === "user" ? "User" : message.role === "assistant" ? "Assistant" : "System";
+    return [`${label}: ${text}`];
+  });
+  if (lines.length === 0) {
+    return undefined;
+  }
+  return [
+    "Conversation context from this T3 Code thread before the current user message.",
+    "Use this as prior conversation history. Do not repeat it unless it is directly relevant.",
+    "",
+    "<conversation_context>",
+    ...lines,
+    "</conversation_context>",
+  ].join("\n");
+}
+
+function joinTurnTextDeltas(deltas: ReadonlyArray<string> | undefined): string | undefined {
+  const text = deltas?.join("").trim();
+  return text && text.length > 0 ? text : undefined;
+}
+
+interface KiroContextRefreshCommandResult {
+  readonly usage: ThreadTokenUsageSnapshot;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly exitCode: number;
+}
+
+function runKiroContextRefreshCommand(input: {
+  readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
+  readonly command: string;
+  readonly cwd: string;
+  readonly sessionId: string;
+  readonly environment: NodeJS.ProcessEnv | undefined;
+}): Effect.Effect<KiroContextRefreshCommandResult | undefined> {
+  const run = Effect.gen(function* () {
+    const child = yield* input.spawner.spawn(
+      ChildProcess.make(
+        input.command,
+        ["chat", "--no-interactive", "--wrap", "never", "--resume-id", input.sessionId, "/context"],
+        {
+          cwd: input.cwd,
+          env: {
+            ...input.environment,
+            NO_COLOR: "1",
+            TERM: "dumb",
+          },
+          extendEnv: true,
+          shell: process.platform === "win32",
+        },
+      ),
+    );
+
+    const [stdout, stderr, exitCode] = yield* Effect.all(
+      [
+        collectUint8StreamText({
+          stream: child.stdout,
+          maxBytes: KIRO_CONTEXT_REFRESH_MAX_OUTPUT_BYTES,
+          truncatedMarker: "\n\n[truncated]",
+        }),
+        collectUint8StreamText({
+          stream: child.stderr,
+          maxBytes: KIRO_CONTEXT_REFRESH_MAX_OUTPUT_BYTES,
+          truncatedMarker: "\n\n[truncated]",
+        }),
+        child.exitCode,
+      ],
+      { concurrency: "unbounded" },
+    );
+
+    const numericExitCode = Number(exitCode);
+    if (numericExitCode !== 0) {
+      return undefined;
+    }
+
+    const usage = parseKiroContextUsageText(`${stdout.text}\n${stderr.text}`);
+    if (!usage) {
+      return undefined;
+    }
+
+    return {
+      usage,
+      stdout: stdout.text,
+      stderr: stderr.text,
+      exitCode: numericExitCode,
+    } satisfies KiroContextRefreshCommandResult;
+  });
+
+  return run.pipe(
+    Effect.scoped,
+    Effect.timeoutOption(KIRO_CONTEXT_REFRESH_TIMEOUT),
+    Effect.map((result) => (Option.isSome(result) ? result.value : undefined)),
+    Effect.catch(() => Effect.sync((): KiroContextRefreshCommandResult | undefined => undefined)),
+  );
 }
 
 export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapterLiveOptions) {
@@ -357,6 +499,70 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
           },
           threadId,
         );
+      });
+
+    const drainKiroContextRefreshQueue = (ctx: KiroSessionContext): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        while (ctx.contextRefreshQueued && !ctx.stopped) {
+          ctx.contextRefreshQueued = false;
+          const generation = ctx.contextRefreshGeneration;
+          const turnId = ctx.latestContextRefreshTurnId;
+          const sessionId = parseKiroResume(ctx.session.resumeCursor)?.sessionId;
+          if (!sessionId) {
+            continue;
+          }
+
+          const result = yield* runKiroContextRefreshCommand({
+            spawner: childProcessSpawner,
+            command: ctx.contextRefreshCommand,
+            cwd: ctx.cwd,
+            sessionId,
+            environment: ctx.contextRefreshEnvironment,
+          });
+          if (!result || ctx.stopped || ctx.contextRefreshGeneration !== generation) {
+            continue;
+          }
+
+          yield* offerRuntimeEvent({
+            type: "thread.token-usage.updated",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId,
+            payload: {
+              usage: result.usage,
+            },
+            raw: {
+              source: "acp.kiro.extension",
+              method: "kiro-cli/chat/context",
+              payload: {
+                exitCode: result.exitCode,
+                stdout: result.stdout.slice(0, 4000),
+                stderr: result.stderr.slice(0, 4000),
+              },
+            },
+          });
+        }
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            ctx.contextRefreshInFlight = false;
+          }),
+        ),
+      );
+
+    const scheduleKiroContextRefresh = (ctx: KiroSessionContext, turnId: TurnId) =>
+      Effect.gen(function* () {
+        if (ctx.stopped) {
+          return;
+        }
+        ctx.latestContextRefreshTurnId = turnId;
+        ctx.contextRefreshQueued = true;
+        if (ctx.contextRefreshInFlight) {
+          return;
+        }
+        ctx.contextRefreshInFlight = true;
+        yield* drainKiroContextRefreshQueue(ctx).pipe(Effect.forkIn(ctx.scope), Effect.asVoid);
       });
 
     const emitPlanUpdate = (
@@ -597,14 +803,22 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
 
           ctx = {
             threadId: input.threadId,
+            cwd,
             session,
             scope: sessionScope,
             acp,
+            contextRefreshCommand: effectiveKiroSettings?.binaryPath || "kiro-cli",
+            contextRefreshEnvironment: options?.environment,
             notificationFiber: undefined,
             pendingApprovals,
             pendingUserInputs,
             turns: [],
+            turnTextDeltas: new Map(),
             lastPlanFingerprint: undefined,
+            contextRefreshGeneration: 0,
+            contextRefreshInFlight: false,
+            contextRefreshQueued: false,
+            latestContextRefreshTurnId: undefined,
             activeTurnId: undefined,
             stopped: false,
           };
@@ -673,6 +887,11 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
                     );
                     return;
                   case "ContentDelta":
+                    if (ctx.activeTurnId) {
+                      const existing = ctx.turnTextDeltas.get(ctx.activeTurnId) ?? [];
+                      existing.push(event.text);
+                      ctx.turnTextDeltas.set(ctx.activeTurnId, existing);
+                    }
                     yield* logNative(
                       ctx.threadId,
                       "session/update",
@@ -687,6 +906,24 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
                         turnId: ctx.activeTurnId,
                         ...(event.itemId ? { itemId: event.itemId } : {}),
                         text: event.text,
+                        rawPayload: event.rawPayload,
+                      }),
+                    );
+                    return;
+                  case "UsageUpdated":
+                    yield* logNative(
+                      ctx.threadId,
+                      "session/update",
+                      event.rawPayload,
+                      "acp.jsonrpc",
+                    );
+                    yield* offerRuntimeEvent(
+                      makeAcpTokenUsageUpdatedEvent({
+                        stamp: yield* makeEventStamp(),
+                        provider: PROVIDER,
+                        threadId: ctx.threadId,
+                        turnId: ctx.activeTurnId,
+                        usage: event.payload.usage,
                         rawPayload: event.rawPayload,
                       }),
                     );
@@ -750,6 +987,7 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
         });
         ctx.activeTurnId = turnId;
         ctx.lastPlanFingerprint = undefined;
+        ctx.contextRefreshGeneration += 1;
         ctx.session = {
           ...ctx.session,
           activeTurnId: turnId,
@@ -766,6 +1004,10 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
         });
 
         const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
+        const transcriptContext = formatTranscriptContext(input.transcriptContext ?? []);
+        if (transcriptContext) {
+          promptParts.push({ type: "text", text: transcriptContext });
+        }
         if (input.input?.trim()) {
           promptParts.push({ type: "text", text: input.input.trim() });
         }
@@ -819,6 +1061,9 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
             ),
           );
 
+        const shouldRefreshContextAfterTurn =
+          result.stopReason !== "cancelled" && !isKiroContextCommand(input.input);
+
         ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
         ctx.session = {
           ...ctx.session,
@@ -826,6 +1071,26 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
           updatedAt: yield* nowIso,
           model: resolvedModel,
         };
+
+        if (isKiroContextCommand(input.input)) {
+          const contextText = joinTurnTextDeltas(ctx.turnTextDeltas.get(turnId));
+          const contextUsage = parseKiroContextUsageText(contextText);
+          if (contextUsage) {
+            yield* offerRuntimeEvent(
+              makeAcpTokenUsageUpdatedEvent({
+                stamp: yield* makeEventStamp(),
+                provider: PROVIDER,
+                threadId: input.threadId,
+                turnId,
+                usage: contextUsage,
+                rawPayload: {
+                  sessionUpdate: "kiro_context_command",
+                  text: contextText,
+                },
+              }),
+            );
+          }
+        }
 
         yield* offerRuntimeEvent({
           type: "turn.completed",
@@ -838,6 +1103,10 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
             stopReason: result.stopReason ?? null,
           },
         });
+
+        if (shouldRefreshContextAfterTurn) {
+          yield* scheduleKiroContextRefresh(ctx, turnId);
+        }
 
         return {
           threadId: input.threadId,
@@ -858,6 +1127,29 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
             ),
           ),
         );
+      });
+
+    const compactConversation: KiroAdapterShape["compactConversation"] = (input) =>
+      Effect.gen(function* () {
+        const result = yield* sendTurn({
+          threadId: input.threadId,
+          input: "/compact",
+        });
+        const ctx = yield* requireSession(input.threadId);
+        const detail = omitProviderCompactionProgressText(
+          joinTurnTextDeltas(ctx.turnTextDeltas.get(result.turnId)),
+        );
+        yield* offerRuntimeEvent({
+          type: "thread.state.changed",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: input.threadId,
+          turnId: result.turnId,
+          payload: {
+            state: "compacted",
+            ...(detail ? { detail } : {}),
+          },
+        });
       });
 
     const respondToRequest: KiroAdapterShape["respondToRequest"] = (
@@ -953,6 +1245,7 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
       startSession,
       sendTurn,
       interruptTurn,
+      compactConversation,
       readThread,
       rollbackThread,
       respondToRequest,

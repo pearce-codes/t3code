@@ -211,6 +211,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     startSession,
     sendTurn,
     interruptTurn,
+    compactConversation: () => Effect.void,
     respondToRequest,
     respondToUserInput,
     stopSession,

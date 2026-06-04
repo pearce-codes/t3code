@@ -34,12 +34,12 @@ it.layer(NodeServices.layer)("ServerAuthPolicyLive", (it) => {
 
       expect(descriptor.policy).toBe("desktop-managed-local");
       expect(descriptor.bootstrapMethods).toEqual(["desktop-bootstrap"]);
-      expect(descriptor.sessionCookieName).toBe("t3_session_3773");
+      expect(descriptor.sessionCookieName).toBe("t3_session_5656");
     }).pipe(
       Effect.provide(
         makeServerAuthPolicyLayer({
           mode: "desktop",
-          port: 3773,
+          port: 5656,
         }),
       ),
     ),

@@ -56,6 +56,10 @@ export interface AcpPatchedProtocolOptions {
     method: string,
     params: unknown,
   ) => Effect.Effect<unknown, AcpError.AcpError, never>;
+  readonly onServerRequest?: (
+    method: string,
+    params: unknown,
+  ) => Effect.Effect<unknown, AcpError.AcpError, never>;
   readonly onTermination?: (error: AcpError.AcpError) => Effect.Effect<void, never, never>;
 }
 
@@ -72,6 +76,7 @@ const decodeElicitationComplete = Schema.decodeUnknownEffect(
   AcpSchema.ElicitationCompleteNotification,
 );
 const parserFactory = RpcSerialization.ndJsonRpc();
+const textEncoder = new TextEncoder();
 
 export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(function* (
   options: AcpPatchedProtocolOptions,
@@ -109,6 +114,17 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       stage: "decoded",
       payload: message,
     });
+
+    const manuallyEncoded = encodeStringIdExitMessage(message);
+    if (manuallyEncoded) {
+      yield* logProtocol({
+        direction: "outgoing",
+        stage: "raw",
+        payload: manuallyEncoded,
+      });
+      yield* Queue.offer(outgoing, textEncoder.encode(manuallyEncoded)).pipe(Effect.asVoid);
+      return;
+    }
 
     const encoded = yield* Effect.try({
       try: () => parser.encode(message),
@@ -301,6 +317,16 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     if (!options.serverRequestMethods.has(message.tag)) {
       return handleExtRequest(message).pipe(
         Effect.catch(() => respondWithError(message.id, AcpError.AcpRequestError.internalError())),
+        Effect.asVoid,
+      );
+    }
+
+    if (options.onServerRequest) {
+      return options.onServerRequest(message.tag, message.payload).pipe(
+        Effect.matchEffect({
+          onFailure: (error) => respondWithError(message.id, normalizeToRequestError(error)),
+          onSuccess: (value) => respondWithSuccess(message.id, value),
+        }),
         Effect.asVoid,
       );
     }
@@ -524,6 +550,36 @@ function isProtocolError(
 
 function normalizeToRequestError(error: AcpError.AcpError): AcpError.AcpRequestError {
   return isAcpRequestError(error) ? error : AcpError.AcpRequestError.internalError(error.message);
+}
+
+function encodeStringIdExitMessage(
+  message: RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded,
+): string | undefined {
+  if (message._tag !== "Exit" || isNumericJsonRpcId(message.requestId)) {
+    return undefined;
+  }
+
+  if (message.exit._tag === "Success") {
+    return `${JSON.stringify({
+      jsonrpc: "2.0",
+      id: message.requestId,
+      result: message.exit.value,
+    })}\n`;
+  }
+
+  const failure = message.exit.cause.find((entry) => entry._tag === "Fail");
+  return `${JSON.stringify({
+    jsonrpc: "2.0",
+    id: message.requestId,
+    error:
+      failure && isProtocolError(failure.error)
+        ? failure.error
+        : AcpError.AcpRequestError.internalError().toProtocolError(),
+  })}\n`;
+}
+
+function isNumericJsonRpcId(value: string): boolean {
+  return /^(?:0|[1-9]\d*)$/.test(value);
 }
 
 function toRpcClientError(error: AcpError.AcpError): RpcClientError.RpcClientError {

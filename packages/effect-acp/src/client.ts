@@ -115,6 +115,13 @@ export interface AcpClientShape {
       payload: AcpSchema.SetSessionConfigOptionRequest,
     ) => Effect.Effect<AcpSchema.SetSessionConfigOptionResponse, AcpError.AcpError>;
     /**
+     * Selects the active mode for a session.
+     * @see https://agentclientprotocol.com/protocol/schema#session/set_mode
+     */
+    readonly setSessionMode: (
+      payload: AcpSchema.SetSessionModeRequest,
+    ) => Effect.Effect<AcpSchema.SetSessionModeResponse, AcpError.AcpError>;
+    /**
      * Sends a prompt turn to the agent.
      * @see https://agentclientprotocol.com/protocol/schema#session/prompt
      */
@@ -397,6 +404,92 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
       : Effect.fail(AcpError.AcpRequestError.methodNotFound(method));
   };
 
+  const decodeCoreRequest = <A, I, B>(
+    method: string,
+    payload: Schema.Codec<A, I>,
+    handler: ((payload: A) => Effect.Effect<B, AcpError.AcpError>) | undefined,
+    params: unknown,
+    mapResult: (result: B) => unknown = (result) => result,
+  ) =>
+    decodeExtRequestRegistration(method, payload, (decoded) =>
+      handler
+        ? handler(decoded).pipe(Effect.map(mapResult))
+        : Effect.fail(AcpError.AcpRequestError.methodNotFound(method)),
+    )(params);
+
+  const dispatchCoreRequest = (method: string, params: unknown) => {
+    switch (method) {
+      case CLIENT_METHODS.session_request_permission:
+        return decodeCoreRequest(
+          CLIENT_METHODS.session_request_permission,
+          AcpSchema.RequestPermissionRequest,
+          coreHandlers.requestPermission,
+          params,
+        );
+      case CLIENT_METHODS.session_elicitation:
+        return decodeCoreRequest(
+          CLIENT_METHODS.session_elicitation,
+          AcpSchema.ElicitationRequest,
+          coreHandlers.elicitation,
+          params,
+        );
+      case CLIENT_METHODS.fs_read_text_file:
+        return decodeCoreRequest(
+          CLIENT_METHODS.fs_read_text_file,
+          AcpSchema.ReadTextFileRequest,
+          coreHandlers.readTextFile,
+          params,
+        );
+      case CLIENT_METHODS.fs_write_text_file:
+        return decodeCoreRequest(
+          CLIENT_METHODS.fs_write_text_file,
+          AcpSchema.WriteTextFileRequest,
+          coreHandlers.writeTextFile,
+          params,
+          (result) => result ?? {},
+        );
+      case CLIENT_METHODS.terminal_create:
+        return decodeCoreRequest(
+          CLIENT_METHODS.terminal_create,
+          AcpSchema.CreateTerminalRequest,
+          coreHandlers.createTerminal,
+          params,
+        );
+      case CLIENT_METHODS.terminal_output:
+        return decodeCoreRequest(
+          CLIENT_METHODS.terminal_output,
+          AcpSchema.TerminalOutputRequest,
+          coreHandlers.terminalOutput,
+          params,
+        );
+      case CLIENT_METHODS.terminal_wait_for_exit:
+        return decodeCoreRequest(
+          CLIENT_METHODS.terminal_wait_for_exit,
+          AcpSchema.WaitForTerminalExitRequest,
+          coreHandlers.terminalWaitForExit,
+          params,
+        );
+      case CLIENT_METHODS.terminal_kill:
+        return decodeCoreRequest(
+          CLIENT_METHODS.terminal_kill,
+          AcpSchema.KillTerminalRequest,
+          coreHandlers.terminalKill,
+          params,
+          (result) => result ?? {},
+        );
+      case CLIENT_METHODS.terminal_release:
+        return decodeCoreRequest(
+          CLIENT_METHODS.terminal_release,
+          AcpSchema.ReleaseTerminalRequest,
+          coreHandlers.terminalRelease,
+          params,
+          (result) => result ?? {},
+        );
+      default:
+        return Effect.fail(AcpError.AcpRequestError.methodNotFound(method));
+    }
+  };
+
   const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
     stdio: stdio,
     ...(terminationError ? { terminationError } : {}),
@@ -406,6 +499,7 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
     ...(options.logger ? { logger: options.logger } : {}),
     onNotification: dispatchNotification,
     onExtRequest: dispatchExtRequest,
+    onServerRequest: dispatchCoreRequest,
   });
 
   const clientHandlerLayer = AcpRpcs.ClientRpcs.toLayer(
@@ -475,6 +569,7 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
       setSessionModel: (payload) => callRpc(rpc[AGENT_METHODS.session_set_model](payload)),
       setSessionConfigOption: (payload) =>
         callRpc(rpc[AGENT_METHODS.session_set_config_option](payload)),
+      setSessionMode: (payload) => callRpc(rpc[AGENT_METHODS.session_set_mode](payload)),
       prompt: (payload) => callRpc(rpc[AGENT_METHODS.session_prompt](payload)),
       cancel: (payload) => transport.notify(AGENT_METHODS.session_cancel, payload),
     },

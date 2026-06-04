@@ -69,6 +69,14 @@ export const ProviderSendTurnInput = Schema.Struct({
   input: Schema.optional(
     TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
   ),
+  transcriptContext: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        role: Schema.Literals(["user", "assistant", "system"]),
+        text: Schema.String,
+      }),
+    ),
+  ),
   attachments: Schema.optional(
     Schema.Array(ChatAttachment).check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS)),
   ),
@@ -89,6 +97,11 @@ export const ProviderInterruptTurnInput = Schema.Struct({
   turnId: Schema.optional(TurnId),
 });
 export type ProviderInterruptTurnInput = typeof ProviderInterruptTurnInput.Type;
+
+export const ProviderCompactConversationInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type ProviderCompactConversationInput = typeof ProviderCompactConversationInput.Type;
 
 export const ProviderStopSessionInput = Schema.Struct({
   threadId: ThreadId,

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { EventId, type OrchestrationThreadActivity, TurnId } from "@t3tools/contracts";
 
-import { deriveLatestContextWindowSnapshot, formatContextWindowTokens } from "./contextWindow";
+import {
+  createPendingContextWindowSnapshot,
+  deriveLatestContextWindowSnapshot,
+  formatContextWindowTokens,
+} from "./contextWindow";
 
 function makeActivity(id: string, kind: string, payload: unknown): OrchestrationThreadActivity {
   return {
@@ -63,5 +67,29 @@ describe("contextWindow", () => {
 
     expect(snapshot?.usedTokens).toBe(81_659);
     expect(snapshot?.totalProcessedTokens).toBe(748_126);
+  });
+
+  it("derives percentage-only context window snapshots", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.updated", {
+        usedTokens: 0,
+        usedPercentage: 5,
+        compactsAutomatically: false,
+      }),
+    ]);
+
+    expect(snapshot?.usedTokens).toBe(0);
+    expect(snapshot?.maxTokens).toBeNull();
+    expect(snapshot?.usedPercentage).toBe(5);
+    expect(snapshot?.remainingPercentage).toBe(95);
+  });
+
+  it("creates a pending context snapshot for loading indicators", () => {
+    expect(createPendingContextWindowSnapshot("2026-03-23T00:00:00.000Z")).toMatchObject({
+      usedTokens: 0,
+      maxTokens: null,
+      usedPercentage: null,
+      updatedAt: "2026-03-23T00:00:00.000Z",
+    });
   });
 });
