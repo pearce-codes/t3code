@@ -181,4 +181,28 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.usage.maxTokens).toBe(200000);
     expect(parsed.payload.usage.usedTokens).toBe(31251);
   });
+
+  it("decodes percentage-only thread token usage snapshots", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "thread.token-usage.updated",
+      eventId: "event-token-usage-percent",
+      provider: "kiro",
+      createdAt: "2026-02-28T00:00:04.000Z",
+      threadId: "thread-1",
+      payload: {
+        usage: {
+          usedTokens: 0,
+          usedPercentage: 5,
+          compactsAutomatically: false,
+        },
+      },
+    });
+
+    expect(parsed.type).toBe("thread.token-usage.updated");
+    if (parsed.type !== "thread.token-usage.updated") {
+      throw new Error("expected thread.token-usage.updated");
+    }
+    expect(parsed.payload.usage.usedTokens).toBe(0);
+    expect(parsed.payload.usage.usedPercentage).toBe(5);
+  });
 });

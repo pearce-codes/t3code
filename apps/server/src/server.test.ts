@@ -4683,11 +4683,26 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           client[WS_METHODS.shellOpenInEditor]({
             cwd: "/tmp/project",
             editor: "cursor",
+            context: {
+              remote: {
+                type: "ssh",
+                authority: "devbox",
+              },
+            },
           }),
         ),
       );
 
-      assert.deepEqual(openedInput, { cwd: "/tmp/project", editor: "cursor" });
+      assert.deepEqual(openedInput, {
+        cwd: "/tmp/project",
+        editor: "cursor",
+        context: {
+          remote: {
+            type: "ssh",
+            authority: "devbox",
+          },
+        },
+      });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

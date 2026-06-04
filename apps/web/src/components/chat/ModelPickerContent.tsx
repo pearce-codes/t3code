@@ -3,7 +3,7 @@ import {
   type ProviderDriverKind,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
-import { resolveSelectableModel } from "@t3tools/shared/model";
+import { normalizeModelSlug, resolveSelectableModel } from "@t3tools/shared/model";
 import { memo, useMemo, useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { SearchIcon } from "lucide-react";
 import { ModelListRow } from "./ModelListRow";
@@ -166,14 +166,19 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     [props.lockedContinuationGroupKey, props.lockedProvider],
   );
 
-  const readyInstanceSet = useMemo(() => {
-    const ready = new Set<ProviderInstanceId>();
+  const selectableInstanceSet = useMemo(() => {
+    const selectable = new Set<ProviderInstanceId>();
     for (const entry of instanceEntries) {
-      if (entry.status === "ready") {
-        ready.add(entry.instanceId);
+      if (
+        entry.enabled &&
+        entry.isAvailable &&
+        entry.models.length > 0 &&
+        entry.status !== "error"
+      ) {
+        selectable.add(entry.instanceId);
       }
     }
-    return ready;
+    return selectable;
   }, [instanceEntries]);
 
   // Flatten models into a searchable array. One pass over the
@@ -189,7 +194,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         // its models — stale options shouldn't appear in the picker.
         continue;
       }
-      if (!readyInstanceSet.has(instanceId)) {
+      if (!selectableInstanceSet.has(instanceId)) {
         continue;
       }
       for (const model of models) {
@@ -209,17 +214,16 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       }
     }
     return out;
-  }, [modelOptionsByInstance, entryByInstanceId, readyInstanceSet]);
+  }, [modelOptionsByInstance, entryByInstanceId, selectableInstanceSet]);
 
   const isLocked = props.lockedProvider !== null;
-  const isSearching = searchQuery.trim().length > 0;
   const lockedInstanceEntries = useMemo(
     () =>
       props.lockedProvider ? instanceEntries.filter((entry) => matchesLockedProvider(entry)) : [],
     [instanceEntries, matchesLockedProvider, props.lockedProvider],
   );
   const showLockedInstanceSidebar = isLocked && lockedInstanceEntries.length > 1;
-  const showSidebar = !isSearching && (!isLocked || showLockedInstanceSidebar);
+  const showSidebar = !isLocked || showLockedInstanceSidebar;
   const sidebarInstanceEntries = showLockedInstanceSidebar
     ? lockedInstanceEntries
     : instanceEntries;
@@ -232,7 +236,18 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   const filteredModels = useMemo(() => {
     let result = flatModels;
 
-    // Apply tokenized fuzzy search across the combined provider/model search fields.
+    if (props.lockedProvider !== null) {
+      result = result.filter((m) => matchesLockedProvider(m));
+      if (showLockedInstanceSidebar) {
+        result = result.filter((m) => m.instanceId === selectedInstanceId);
+      }
+    } else if (selectedInstanceId === "favorites") {
+      result = result.filter((m) => favoritesSet.has(providerModelKey(m.instanceId, m.slug)));
+    } else {
+      result = result.filter((m) => m.instanceId === selectedInstanceId);
+    }
+
+    // Apply tokenized fuzzy search within the currently-selected provider rail item.
     if (searchQuery.trim()) {
       const rankedMatches = result
         .map((model) => ({
@@ -306,17 +321,6 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         .map((rankedModel) => rankedModel.model);
     }
 
-    if (props.lockedProvider !== null) {
-      result = result.filter((m) => matchesLockedProvider(m));
-      if (showLockedInstanceSidebar) {
-        result = result.filter((m) => m.instanceId === selectedInstanceId);
-      }
-    } else if (selectedInstanceId === "favorites") {
-      result = result.filter((m) => favoritesSet.has(providerModelKey(m.instanceId, m.slug)));
-    } else {
-      result = result.filter((m) => m.instanceId === selectedInstanceId);
-    }
-
     return sortProviderModelItems(result, {
       favoriteModelKeys: favoritesSet,
       groupFavorites: selectedInstanceId !== "favorites",
@@ -334,9 +338,13 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   ]);
 
   const handleModelSelect = useCallback(
-    (modelSlug: string, instanceId: ProviderInstanceId) => {
-      const options = modelOptionsByInstance.get(instanceId);
-      if (!options) {
+    (
+      modelSlug: string,
+      instanceId: ProviderInstanceId,
+      selectOptions?: { readonly allowCustomModel?: boolean },
+    ) => {
+      const modelOptions = modelOptionsByInstance.get(instanceId);
+      if (!modelOptions) {
         return;
       }
       const entry = entryByInstanceId.get(instanceId);
@@ -346,7 +354,11 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       // `resolveSelectableModel` uses the driver kind for normalization
       // (slug casing etc.). Custom instances share their driver's
       // normalization rules, so pass the driver kind here.
-      const resolvedModel = resolveSelectableModel(entry.driverKind, modelSlug, options);
+      const resolvedModel =
+        resolveSelectableModel(entry.driverKind, modelSlug, modelOptions) ??
+        (selectOptions?.allowCustomModel
+          ? (normalizeModelSlug(modelSlug, entry.driverKind) ?? modelSlug.trim())
+          : null);
       if (resolvedModel) {
         onInstanceModelChange(instanceId, resolvedModel);
       }
@@ -444,6 +456,27 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     }
     return mapping.size > 0 ? mapping : EMPTY_MODEL_JUMP_LABELS;
   }, [keybindings, modelJumpCommandByKey, modelJumpShortcutContext]);
+  const typedModelTarget = useMemo(() => {
+    const raw = searchQuery.trim();
+    if (!raw || filteredModels.length > 0) {
+      return null;
+    }
+    const instanceId =
+      selectedInstanceId === "favorites" ? props.activeInstanceId : selectedInstanceId;
+    const entry = entryByInstanceId.get(instanceId);
+    if (!entry || !selectableInstanceSet.has(instanceId)) {
+      return null;
+    }
+    const model = normalizeModelSlug(raw, entry.driverKind) ?? raw;
+    return model ? { instanceId, model, providerName: entry.displayName } : null;
+  }, [
+    entryByInstanceId,
+    filteredModels.length,
+    props.activeInstanceId,
+    searchQuery,
+    selectableInstanceSet,
+    selectedInstanceId,
+  ]);
 
   useEffect(() => {
     const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -524,7 +557,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     <TooltipProvider delay={0}>
       <div
         className={cn(
-          "relative flex h-screen max-h-96 w-screen max-w-100 overflow-hidden rounded-lg border bg-popover not-dark:bg-clip-padding text-popover-foreground shadow-lg/5 before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
+          "relative flex h-screen max-h-96 w-screen max-w-[50rem] overflow-hidden rounded-lg border bg-popover not-dark:bg-clip-padding text-popover-foreground shadow-lg/5 before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
           isLocked && !showLockedInstanceSidebar ? "flex-col" : "flex-row",
         )}
       >
@@ -644,7 +677,24 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
               </ComboboxList>
             </div>
             <ComboboxEmpty className="not-empty:py-6 empty:h-0 text-xs font-normal leading-snug">
-              No models found
+              {typedModelTarget ? (
+                <button
+                  type="button"
+                  className="mx-auto flex max-w-full flex-col items-center gap-1 rounded-md px-3 py-2 text-center text-foreground hover:bg-accent hover:text-accent-foreground"
+                  onClick={() =>
+                    handleModelSelect(typedModelTarget.model, typedModelTarget.instanceId, {
+                      allowCustomModel: true,
+                    })
+                  }
+                >
+                  <span className="font-medium">Use typed model</span>
+                  <span className="max-w-72 truncate text-muted-foreground">
+                    {typedModelTarget.providerName} · {typedModelTarget.model}
+                  </span>
+                </button>
+              ) : (
+                "No models found"
+              )}
             </ComboboxEmpty>
           </div>
         </Combobox>

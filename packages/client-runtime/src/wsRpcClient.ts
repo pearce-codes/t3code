@@ -60,6 +60,8 @@ type RpcInputStreamMethod<TTag extends RpcTag> =
       ) => () => void
     : never;
 
+type ShellOpenInEditorContext = NonNullable<Parameters<LocalApi["shell"]["openInEditor"]>[2]>;
+
 interface GitRunStackedActionOptions {
   readonly onProgress?: (event: GitActionProgressEvent) => void;
 }
@@ -95,6 +97,7 @@ export interface WsRpcClient {
     readonly openInEditor: (input: {
       readonly cwd: Parameters<LocalApi["shell"]["openInEditor"]>[0];
       readonly editor: Parameters<LocalApi["shell"]["openInEditor"]>[1];
+      readonly context?: ShellOpenInEditorContext;
     }) => ReturnType<LocalApi["shell"]["openInEditor"]>;
   };
   readonly vcs: {
@@ -231,7 +234,20 @@ export function createWsRpcClient(
     },
     shell: {
       openInEditor: (input) =>
-        transport.request((client) => client[WS_METHODS.shellOpenInEditor](input)),
+        transport.request((client) =>
+          client[WS_METHODS.shellOpenInEditor](
+            input.context === undefined
+              ? {
+                  cwd: input.cwd,
+                  editor: input.editor,
+                }
+              : {
+                  cwd: input.cwd,
+                  editor: input.editor,
+                  context: input.context,
+                },
+          ),
+        ),
     },
     vcs: {
       pull: (input) => transport.request((client) => client[WS_METHODS.vcsPull](input)),

@@ -427,13 +427,15 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
             ? [String((entry.params as Record<string, unknown>).configId)]
             : [],
         );
-        assert.deepStrictEqual(configIdsAfterStart, [
-          "model",
-          "reasoning",
-          "context",
-          "fast",
-          "mode",
-        ]);
+        assert.deepStrictEqual(configIdsAfterStart, ["model", "reasoning", "context", "fast"]);
+        const modeRequestsAfterStart = requestsAfterStart.filter(
+          (entry) => entry.method === "session/set_mode",
+        );
+        assert.lengthOf(modeRequestsAfterStart, 1);
+        assert.equal(
+          (modeRequestsAfterStart[0]?.params as Record<string, unknown> | undefined)?.modeId,
+          "code",
+        );
 
         yield* adapter.sendTurn({
           threadId,
@@ -451,7 +453,7 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
             ? [String((entry.params as Record<string, unknown>).configId)]
             : [],
         );
-        assert.deepStrictEqual(finalConfigIds, ["model", "reasoning", "context", "fast", "mode"]);
+        assert.deepStrictEqual(finalConfigIds, ["model", "reasoning", "context", "fast"]);
         assert.equal(finalRequests.filter((entry) => entry.method === "session/prompt").length, 1);
       }),
   );

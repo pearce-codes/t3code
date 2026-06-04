@@ -245,6 +245,37 @@ describe("AcpRuntimeModel", () => {
     ]);
   });
 
+  it("projects ACP usage updates into context-window usage snapshots", () => {
+    const result = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "usage_update",
+        used: 42_000,
+        size: 200_000,
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(result.events).toEqual([
+      {
+        _tag: "UsageUpdated",
+        payload: {
+          usage: {
+            usedTokens: 42_000,
+            maxTokens: 200_000,
+          },
+        },
+        rawPayload: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "usage_update",
+            used: 42_000,
+            size: 200_000,
+          },
+        },
+      },
+    ]);
+  });
+
   it("keeps permission request parsing compatible with loose extension payloads", () => {
     const request = parsePermissionRequest({
       sessionId: "session-1",
@@ -280,6 +311,35 @@ describe("AcpRuntimeModel", () => {
         kind: "execute",
         status: "pending",
         command: "cat package.json",
+      },
+    });
+  });
+
+  it("infers Kiro shell permission requests from their running title", () => {
+    const request = parsePermissionRequest({
+      sessionId: "session-1",
+      options: [
+        {
+          optionId: "allow-once",
+          name: "Allow once",
+          kind: "allow_once",
+        },
+      ],
+      toolCall: {
+        toolCallId: "tool-1",
+        title: "Running: pwd",
+      },
+    });
+
+    expect(request).toMatchObject({
+      kind: "execute",
+      detail: "pwd",
+      toolCall: {
+        toolCallId: "tool-1",
+        kind: "execute",
+        status: "pending",
+        title: "Ran command",
+        command: "pwd",
       },
     });
   });

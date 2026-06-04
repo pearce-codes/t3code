@@ -1,7 +1,14 @@
-import { EditorId, type ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import {
+  EditorId,
+  type EditorLaunchContext,
+  type ResolvedKeybindingsConfig,
+} from "@t3tools/contracts";
 import { memo, useCallback, useEffect, useMemo } from "react";
 import { isOpenFavoriteEditorShortcut, shortcutLabelForCommand } from "../../keybindings";
-import { usePreferredEditor } from "../../editorPreferences";
+import {
+  filterAvailableEditorsForLaunchContext,
+  usePreferredEditor,
+} from "../../editorPreferences";
 import { ChevronDownIcon, FolderClosedIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { Group, GroupSeparator } from "../ui/group";
@@ -154,15 +161,21 @@ export const OpenInPicker = memo(function OpenInPicker({
   keybindings,
   availableEditors,
   openInCwd,
+  launchContext,
 }: {
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   openInCwd: string | null;
+  launchContext?: EditorLaunchContext | undefined;
 }) {
-  const [preferredEditor, setPreferredEditor] = usePreferredEditor(availableEditors);
+  const launchAvailableEditors = useMemo(
+    () => filterAvailableEditorsForLaunchContext(availableEditors, launchContext),
+    [availableEditors, launchContext],
+  );
+  const [preferredEditor, setPreferredEditor] = usePreferredEditor(launchAvailableEditors);
   const options = useMemo(
-    () => resolveOptions(navigator.platform, availableEditors),
-    [availableEditors],
+    () => resolveOptions(navigator.platform, launchAvailableEditors),
+    [launchAvailableEditors],
   );
   const primaryOption = options.find(({ value }) => value === preferredEditor) ?? null;
 
@@ -172,10 +185,10 @@ export const OpenInPicker = memo(function OpenInPicker({
       if (!api || !openInCwd) return;
       const editor = editorId ?? preferredEditor;
       if (!editor) return;
-      void api.shell.openInEditor(openInCwd, editor);
+      void api.shell.openInEditor(openInCwd, editor, launchContext);
       setPreferredEditor(editor);
     },
-    [preferredEditor, openInCwd, setPreferredEditor],
+    [launchContext, preferredEditor, openInCwd, setPreferredEditor],
   );
 
   const openFavoriteEditorShortcutLabel = useMemo(
@@ -191,11 +204,11 @@ export const OpenInPicker = memo(function OpenInPicker({
       if (!preferredEditor) return;
 
       e.preventDefault();
-      void api.shell.openInEditor(openInCwd, preferredEditor);
+      void api.shell.openInEditor(openInCwd, preferredEditor, launchContext);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [preferredEditor, keybindings, openInCwd]);
+  }, [launchContext, preferredEditor, keybindings, openInCwd]);
 
   return (
     <Group aria-label="Subscription actions">

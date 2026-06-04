@@ -1,4 +1,5 @@
 import {
+  type EditorLaunchContext,
   type EnvironmentId,
   type EditorId,
   type ProjectScript,
@@ -26,6 +27,7 @@ interface ChatHeaderProps {
   activeProjectName: string | undefined;
   isGitRepo: boolean;
   openInCwd: string | null;
+  openInLaunchContext?: EditorLaunchContext | undefined;
   activeProjectScripts: ProjectScript[] | undefined;
   preferredScriptId: string | null;
   keybindings: ResolvedKeybindingsConfig;
@@ -48,11 +50,13 @@ export function shouldShowOpenInPicker(input: {
   readonly activeProjectName: string | undefined;
   readonly activeThreadEnvironmentId: EnvironmentId;
   readonly primaryEnvironmentId: EnvironmentId | null;
+  readonly openInLaunchContext?: EditorLaunchContext | undefined;
 }): boolean {
   return (
     Boolean(input.activeProjectName) &&
-    input.primaryEnvironmentId !== null &&
-    input.activeThreadEnvironmentId === input.primaryEnvironmentId
+    ((input.primaryEnvironmentId !== null &&
+      input.activeThreadEnvironmentId === input.primaryEnvironmentId) ||
+      input.openInLaunchContext?.remote?.type === "ssh")
   );
 }
 
@@ -64,6 +68,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeProjectName,
   isGitRepo,
   openInCwd,
+  openInLaunchContext,
   activeProjectScripts,
   preferredScriptId,
   keybindings,
@@ -86,6 +91,7 @@ export const ChatHeader = memo(function ChatHeader({
     activeProjectName,
     activeThreadEnvironmentId,
     primaryEnvironmentId,
+    openInLaunchContext,
   });
 
   return (
@@ -129,6 +135,7 @@ export const ChatHeader = memo(function ChatHeader({
             keybindings={keybindings}
             availableEditors={availableEditors}
             openInCwd={openInCwd}
+            launchContext={openInLaunchContext}
           />
         )}
         {activeProjectName && (

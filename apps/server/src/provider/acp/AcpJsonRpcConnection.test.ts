@@ -299,6 +299,47 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
+  it.effect("sets session mode via session/set_mode instead of a mode config write", () => {
+    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      yield* runtime.start();
+
+      yield* runtime.setMode("code");
+
+      expect(
+        requestEvents.some(
+          (event) => event.method === "session/set_mode" && event.status === "succeeded",
+        ),
+      ).toBe(true);
+      expect(
+        requestEvents.some(
+          (event) =>
+            event.method === "session/set_config_option" &&
+            (event.payload as { readonly configId?: unknown }).configId === "mode",
+        ),
+      ).toBe(false);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          authMethodId: "test",
+          spawn: {
+            command: bunExe,
+            args: [mockAgentPath],
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
   it.effect("emits low-level ACP protocol logs for raw and decoded messages", () => {
     const protocolEvents: Array<EffectAcpProtocol.AcpProtocolLogEvent> = [];
     return Effect.gen(function* () {

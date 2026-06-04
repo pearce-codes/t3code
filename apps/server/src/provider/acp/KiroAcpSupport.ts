@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpErrors from "effect-acp/errors";
+import type * as EffectAcpSchema from "effect-acp/schema";
 
 import {
   AcpSessionRuntime,
@@ -32,7 +33,8 @@ export interface KiroAcpRuntimeInput extends Omit<
 
 export interface KiroAcpModelSelectionErrorContext {
   readonly cause: EffectAcpErrors.AcpError;
-  readonly step: "set-model";
+  readonly step: "set-config-option" | "set-mode" | "set-model";
+  readonly configId?: string;
 }
 
 function selectedAgent(
@@ -93,7 +95,33 @@ export const makeKiroAcpRuntime = (
   });
 
 interface KiroAcpModelSelectionRuntime {
-  readonly setModel: (model: string) => Effect.Effect<unknown, EffectAcpErrors.AcpError>;
+  readonly getConfigOptions: AcpSessionRuntimeShape["getConfigOptions"];
+  readonly getModeState: AcpSessionRuntimeShape["getModeState"];
+  readonly setConfigOption: (
+    configId: string,
+    value: string | boolean,
+  ) => Effect.Effect<unknown, EffectAcpErrors.AcpError>;
+  readonly setMode: (modeId: string) => Effect.Effect<unknown, EffectAcpErrors.AcpError>;
+}
+
+function findKiroModelConfigOption(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+): EffectAcpSchema.SessionConfigOption | undefined {
+  return configOptions.find((option) => option.category?.trim().toLowerCase() === "model");
+}
+
+export function findKiroAgentConfigOption(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+): EffectAcpSchema.SessionConfigOption | undefined {
+  return configOptions.find((option) => {
+    if (option.type !== "select") {
+      return false;
+    }
+    const id = option.id.trim().toLowerCase();
+    const name = option.name.trim().toLowerCase();
+    const category = option.category?.trim().toLowerCase() ?? "";
+    return id === "agent" || name === "agent" || category === "agent" || name.includes("agent");
+  });
 }
 
 export function applyKiroAcpModelSelection<E>(input: {
@@ -102,6 +130,55 @@ export function applyKiroAcpModelSelection<E>(input: {
   readonly selections: ReadonlyArray<ProviderOptionSelection> | null | undefined;
   readonly mapError: (context: KiroAcpModelSelectionErrorContext) => E;
 }): Effect.Effect<void, E> {
-  void input;
-  return Effect.void;
+  return Effect.gen(function* () {
+    const configOptions = yield* input.runtime.getConfigOptions;
+    const modelConfigOption = findKiroModelConfigOption(configOptions);
+    if (modelConfigOption) {
+      yield* input.runtime
+        .setConfigOption(modelConfigOption.id, input.model?.trim() || "auto")
+        .pipe(
+          Effect.mapError((cause) =>
+            input.mapError({
+              cause,
+              step: "set-model",
+              configId: modelConfigOption.id,
+            }),
+          ),
+        );
+    }
+
+    const agent = selectedAgent(input.selections);
+    if (!agent) {
+      return;
+    }
+
+    const agentConfigOption = findKiroAgentConfigOption(configOptions);
+    if (agentConfigOption) {
+      yield* input.runtime.setConfigOption(agentConfigOption.id, agent).pipe(
+        Effect.mapError((cause) =>
+          input.mapError({
+            cause,
+            step: "set-config-option",
+            configId: agentConfigOption.id,
+          }),
+        ),
+      );
+      return;
+    }
+
+    const modeState = yield* input.runtime.getModeState;
+    if (!modeState?.availableModes.some((mode) => mode.id === agent)) {
+      return;
+    }
+
+    yield* input.runtime.setMode(agent).pipe(
+      Effect.mapError((cause) =>
+        input.mapError({
+          cause,
+          step: "set-mode",
+          configId: "mode",
+        }),
+      ),
+    );
+  });
 }

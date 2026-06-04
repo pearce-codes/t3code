@@ -1,4 +1,4 @@
-import { memo, useState, useCallback } from "react";
+import { memo, useState, useCallback, useMemo } from "react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { Badge } from "./ui/badge";
@@ -28,6 +28,8 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { readEnvironmentApi } from "~/environmentApi";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { useSavedEnvironmentRegistryStore } from "~/environments/runtime";
+import { resolveDesktopSshEditorLaunchContext } from "~/editorLaunchContext";
 
 function stepStatusIcon(status: string): React.ReactNode {
   if (status === "completed") {
@@ -77,6 +79,13 @@ const PlanSidebar = memo(function PlanSidebar({
   const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
   const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);
   const { copyToClipboard, isCopied } = useCopyToClipboard();
+  const savedEnvironmentRecord = useSavedEnvironmentRegistryStore(
+    (state) => state.byId[environmentId] ?? null,
+  );
+  const editorLaunchContext = useMemo(
+    () => resolveDesktopSshEditorLaunchContext(savedEnvironmentRecord?.desktopSsh),
+    [savedEnvironmentRecord?.desktopSsh],
+  );
 
   const planMarkdown = activeProposedPlan?.planMarkdown ?? null;
   const displayedPlanMarkdown = planMarkdown ? stripDisplayedPlanMarkdown(planMarkdown) : null;
@@ -257,6 +266,7 @@ const PlanSidebar = memo(function PlanSidebar({
                     text={displayedPlanMarkdown ?? ""}
                     cwd={markdownCwd}
                     isStreaming={false}
+                    launchContext={editorLaunchContext}
                   />
                 </div>
               ) : null}

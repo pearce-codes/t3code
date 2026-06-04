@@ -80,6 +80,8 @@ import { readLocalApi } from "~/localApi";
 import { getSourceControlPresentation } from "~/sourceControlPresentation";
 import { useStore } from "~/store";
 import { createThreadSelectorByRef } from "~/storeSelectors";
+import { useSavedEnvironmentRegistryStore } from "~/environments/runtime";
+import { resolveDesktopSshEditorLaunchContext } from "~/editorLaunchContext";
 
 interface GitActionsControlProps {
   gitCwd: string | null;
@@ -951,6 +953,13 @@ export default function GitActionsControl({
   draftId,
 }: GitActionsControlProps) {
   const activeEnvironmentId = activeThreadRef?.environmentId ?? null;
+  const activeSavedEnvironmentRecord = useSavedEnvironmentRegistryStore((state) =>
+    activeEnvironmentId ? (state.byId[activeEnvironmentId] ?? null) : null,
+  );
+  const editorLaunchContext = useMemo(
+    () => resolveDesktopSshEditorLaunchContext(activeSavedEnvironmentRecord?.desktopSsh),
+    [activeSavedEnvironmentRecord?.desktopSsh],
+  );
   const threadToastData = useMemo(
     () => (activeThreadRef ? { threadRef: activeThreadRef } : undefined),
     [activeThreadRef],
@@ -1582,7 +1591,7 @@ export default function GitActionsControl({
         return;
       }
       const target = resolvePathLinkTarget(filePath, gitCwd);
-      void openInPreferredEditor(api, target).catch((error) => {
+      void openInPreferredEditor(api, target, editorLaunchContext).catch((error) => {
         toastManager.add(
           stackedThreadToast({
             type: "error",
@@ -1593,7 +1602,7 @@ export default function GitActionsControl({
         );
       });
     },
-    [gitCwd, threadToastData],
+    [editorLaunchContext, gitCwd, threadToastData],
   );
 
   const canPublishRepository = isRepo && gitStatusForActions !== null && !hasPrimaryRemote;

@@ -71,6 +71,14 @@
       "types": "./src/serverSettings.ts",
       "import": "./src/serverSettings.ts"
     },
+    "./providerCompaction": {
+      "types": "./src/providerCompaction.ts",
+      "import": "./src/providerCompaction.ts"
+    },
+    "./serverPort": {
+      "types": "./src/serverPort.ts",
+      "import": "./src/serverPort.ts"
+    },
     "./String": {
       "types": "./src/String.ts",
       "import": "./src/String.ts"

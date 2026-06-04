@@ -1,6 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Plus, SquareSplitHorizontal, TerminalSquare, Trash2, XIcon } from "lucide-react";
 import {
+  type EditorLaunchContext,
   type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
   type TerminalAttachStreamEvent,
@@ -259,6 +260,7 @@ interface TerminalViewportProps {
   cwd: string;
   worktreePath?: string | null;
   runtimeEnv?: Record<string, string>;
+  editorLaunchContext?: EditorLaunchContext | undefined;
   onSessionExited: () => void;
   onAddTerminalContext: (selection: TerminalContextSelection) => void;
   focusRequestId: number;
@@ -282,6 +284,7 @@ export function TerminalViewport({
   cwd,
   worktreePath,
   runtimeEnv,
+  editorLaunchContext,
   onSessionExited,
   onAddTerminalContext,
   focusRequestId,
@@ -518,7 +521,7 @@ export function TerminalViewport({
               }
 
               const target = resolvePathLinkTarget(match.text, cwd);
-              void openInPreferredEditor(localApi, target).catch((error) => {
+              void openInPreferredEditor(localApi, target, editorLaunchContext).catch((error) => {
                 writeSystemMessage(
                   latestTerminal,
                   error instanceof Error ? error.message : "Unable to open path",
@@ -727,7 +730,7 @@ export function TerminalViewport({
     // autoFocus is intentionally omitted;
     // it is only read at mount time and must not trigger terminal teardown/recreation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd, environmentId, runtimeEnvKey, terminalId, threadId, worktreePath]);
+  }, [cwd, editorLaunchContext, environmentId, runtimeEnvKey, terminalId, threadId, worktreePath]);
 
   useEffect(() => {
     if (!autoFocus) return;
@@ -779,6 +782,7 @@ interface ThreadTerminalDrawerProps {
   cwd: string;
   worktreePath?: string | null;
   runtimeEnv?: Record<string, string>;
+  editorLaunchContext?: EditorLaunchContext | undefined;
   visible?: boolean;
   height: number;
   terminalIds: string[];
@@ -837,6 +841,7 @@ export default function ThreadTerminalDrawer({
   cwd,
   worktreePath,
   runtimeEnv,
+  editorLaunchContext,
   visible = true,
   height,
   terminalIds,
@@ -1234,6 +1239,7 @@ export default function ThreadTerminalDrawer({
                           {...(terminalLaunchLocation.runtimeEnv
                             ? { runtimeEnv: terminalLaunchLocation.runtimeEnv }
                             : {})}
+                          {...(editorLaunchContext !== undefined ? { editorLaunchContext } : {})}
                           onSessionExited={() => onCloseTerminal(terminalId)}
                           onAddTerminalContext={onAddTerminalContext}
                           focusRequestId={focusRequestId}
@@ -1262,6 +1268,7 @@ export default function ThreadTerminalDrawer({
                   {...(activeTerminalLaunchLocation.runtimeEnv
                     ? { runtimeEnv: activeTerminalLaunchLocation.runtimeEnv }
                     : {})}
+                  {...(editorLaunchContext !== undefined ? { editorLaunchContext } : {})}
                   onSessionExited={() => onCloseTerminal(resolvedActiveTerminalId)}
                   onAddTerminalContext={onAddTerminalContext}
                   focusRequestId={focusRequestId}

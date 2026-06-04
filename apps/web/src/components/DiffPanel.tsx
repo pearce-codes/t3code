@@ -39,6 +39,8 @@ import { selectProjectByRef, useStore } from "../store";
 import { createThreadSelectorByRef } from "../storeSelectors";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { useSettings } from "../hooks/useSettings";
+import { resolveDesktopSshEditorLaunchContext } from "../editorLaunchContext";
+import { useSavedEnvironmentRegistryStore } from "../environments/runtime";
 import { formatShortTimestamp } from "../timestampFormat";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
@@ -149,6 +151,13 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
           projectId: activeProjectId,
         })
       : undefined,
+  );
+  const activeSavedEnvironmentRecord = useSavedEnvironmentRegistryStore((state) =>
+    activeThread ? (state.byId[activeThread.environmentId] ?? null) : null,
+  );
+  const editorLaunchContext = useMemo(
+    () => resolveDesktopSshEditorLaunchContext(activeSavedEnvironmentRecord?.desktopSsh),
+    [activeSavedEnvironmentRecord?.desktopSsh],
   );
   const activeCwd = activeThread?.worktreePath ?? activeProject?.cwd;
   const gitStatusQuery = useVcsStatus({
@@ -298,11 +307,11 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       const api = readLocalApi();
       if (!api) return;
       const targetPath = activeCwd ? resolvePathLinkTarget(filePath, activeCwd) : filePath;
-      void openInPreferredEditor(api, targetPath).catch((error) => {
+      void openInPreferredEditor(api, targetPath, editorLaunchContext).catch((error) => {
         console.warn("Failed to open diff file in editor.", error);
       });
     },
-    [activeCwd],
+    [activeCwd, editorLaunchContext],
   );
   const toggleDiffFileCollapsed = useCallback((fileKey: string) => {
     setCollapsedDiffFileKeys((current) => {

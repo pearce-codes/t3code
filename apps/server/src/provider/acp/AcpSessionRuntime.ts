@@ -365,6 +365,43 @@ const makeAcpSessionRuntime = (
         ),
       );
 
+    const setSessionMode = (
+      modeId: string,
+    ): Effect.Effect<EffectAcpSchema.SetSessionModeResponse, EffectAcpErrors.AcpError> =>
+      getStartedState.pipe(
+        Effect.flatMap((started) => {
+          const requestPayload = {
+            sessionId: started.sessionId,
+            modeId,
+          } satisfies EffectAcpSchema.SetSessionModeRequest;
+          return runLoggedRequest(
+            "session/set_mode",
+            requestPayload,
+            acp.agent.setSessionMode(requestPayload),
+          );
+        }),
+      );
+
+    const setModeWithConfigOptionFallback = (
+      modeId: string,
+    ): Effect.Effect<EffectAcpSchema.SetSessionModeResponse, EffectAcpErrors.AcpError> =>
+      setSessionMode(modeId).pipe(
+        Effect.catch((error) => {
+          if (!isMethodNotFoundRequestError(error)) {
+            return Effect.fail(error);
+          }
+          return Ref.get(configOptionsRef).pipe(
+            Effect.flatMap((configOptions) =>
+              findSessionConfigOption(configOptions, "mode")
+                ? setConfigOption("mode", modeId).pipe(
+                    Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
+                  )
+                : Effect.fail(error),
+            ),
+          );
+        }),
+      );
+
     const startOnce = Effect.gen(function* () {
       const initializePayload = {
         protocolVersion: 1,
@@ -539,9 +576,8 @@ const makeAcpSessionRuntime = (
             if (modeState?.currentModeId === modeId) {
               return Effect.succeed({} satisfies EffectAcpSchema.SetSessionModeResponse);
             }
-            return setConfigOption("mode", modeId).pipe(
+            return setModeWithConfigOptionFallback(modeId).pipe(
               Effect.tap(() => updateCurrentModeId(modeId)),
-              Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
             );
           }),
         ),
@@ -579,6 +615,10 @@ function configOptionCurrentValueMatches(
     return false;
   }
   return currentValue.trim() === String(value).trim();
+}
+
+function isMethodNotFoundRequestError(error: EffectAcpErrors.AcpError): boolean {
+  return error._tag === "AcpRequestError" && error.code === -32601;
 }
 
 const handleSessionUpdate = ({

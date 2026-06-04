@@ -1,4 +1,10 @@
-import { EDITORS, EditorId, LocalApi } from "@t3tools/contracts";
+import {
+  EDITORS,
+  EditorId,
+  type EditorLaunchContext,
+  LocalApi,
+  REMOTE_SSH_EDITOR_IDS,
+} from "@t3tools/contracts";
 import { getLocalStorageItem, setLocalStorageItem, useLocalStorage } from "./hooks/useLocalStorage";
 import { useMemo } from "react";
 
@@ -26,10 +32,28 @@ export function resolveAndPersistPreferredEditor(
   return editor ?? null;
 }
 
-export async function openInPreferredEditor(api: LocalApi, targetPath: string): Promise<EditorId> {
+export function filterAvailableEditorsForLaunchContext(
+  availableEditors: readonly EditorId[],
+  context?: EditorLaunchContext,
+): readonly EditorId[] {
+  if (context?.remote?.type === "ssh") {
+    return availableEditors.filter((editor) =>
+      (REMOTE_SSH_EDITOR_IDS as ReadonlyArray<EditorId>).includes(editor),
+    );
+  }
+  return availableEditors;
+}
+
+export async function openInPreferredEditor(
+  api: LocalApi,
+  targetPath: string,
+  context?: EditorLaunchContext,
+): Promise<EditorId> {
   const { availableEditors } = await api.server.getConfig();
-  const editor = resolveAndPersistPreferredEditor(availableEditors);
+  const editor = resolveAndPersistPreferredEditor(
+    filterAvailableEditorsForLaunchContext(availableEditors, context),
+  );
   if (!editor) throw new Error("No available editors found.");
-  await api.shell.openInEditor(targetPath, editor);
+  await api.shell.openInEditor(targetPath, editor, context);
   return editor;
 }

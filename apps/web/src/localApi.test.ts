@@ -365,6 +365,30 @@ describe("wsApi", () => {
     expect(rpcClientMock.server.subscribeLifecycle).not.toHaveBeenCalled();
   });
 
+  it("forwards editor launch context to the RPC client", async () => {
+    const { createLocalApi } = await import("./localApi");
+
+    const api = createLocalApi(rpcClientMock as never);
+
+    await api.shell.openInEditor("/home/pearce/project", "vscode", {
+      remote: {
+        type: "ssh",
+        authority: "devbox",
+      },
+    });
+
+    expect(rpcClientMock.shell.openInEditor).toHaveBeenCalledWith({
+      cwd: "/home/pearce/project",
+      editor: "vscode",
+      context: {
+        remote: {
+          type: "ssh",
+          authority: "devbox",
+        },
+      },
+    });
+  });
+
   it("forwards terminal attach, metadata, and shell stream events", async () => {
     const { createEnvironmentApi } = await import("./environmentApi");
 

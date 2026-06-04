@@ -1,6 +1,6 @@
 import type * as EffectAcpSchema from "effect-acp/schema";
 import { deriveToolActivityPresentation } from "@t3tools/shared/toolActivity";
-import type { ToolLifecycleItemType } from "@t3tools/contracts";
+import type { ThreadTokenUsageSnapshot, ToolLifecycleItemType } from "@t3tools/contracts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -41,6 +41,10 @@ export interface AcpPermissionRequest {
   readonly toolCall?: AcpToolCallState;
 }
 
+export interface AcpUsageUpdate {
+  readonly usage: ThreadTokenUsageSnapshot;
+}
+
 export type AcpParsedSessionEvent =
   | {
       readonly _tag: "ModeChanged";
@@ -68,6 +72,11 @@ export type AcpParsedSessionEvent =
       readonly _tag: "ContentDelta";
       readonly itemId?: string;
       readonly text: string;
+      readonly rawPayload: unknown;
+    }
+  | {
+      readonly _tag: "UsageUpdated";
+      readonly payload: AcpUsageUpdate;
       readonly rawPayload: unknown;
     };
 
@@ -204,7 +213,12 @@ function extractCommandFromTitle(title: string | undefined): string | undefined 
     return undefined;
   }
   const match = /`([^`]+)`/.exec(title);
-  return match?.[1]?.trim() || undefined;
+  const backtickCommand = match?.[1]?.trim();
+  if (backtickCommand) {
+    return backtickCommand;
+  }
+  const runningCommand = /^running:\s*(.+)$/i.exec(title)?.[1]?.trim();
+  return runningCommand || undefined;
 }
 
 function extractToolCallCommand(rawInput: unknown, title: string | undefined): string | undefined {
@@ -248,6 +262,17 @@ function extractTextContentFromToolCallContent(
 
 function normalizeToolKind(kind: unknown): string | undefined {
   return typeof kind === "string" && kind.trim().length > 0 ? kind.trim() : undefined;
+}
+
+function inferToolKindFromTitle(title: string | null | undefined): string | undefined {
+  const normalizedTitle = title?.trim().toLowerCase();
+  if (!normalizedTitle) {
+    return undefined;
+  }
+  if (normalizedTitle.startsWith("running:")) {
+    return "execute";
+  }
+  return undefined;
 }
 
 function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecycleItemType {
@@ -388,11 +413,13 @@ export function mergeToolCallState(
 export function parsePermissionRequest(
   params: EffectAcpSchema.RequestPermissionRequest,
 ): AcpPermissionRequest {
+  const inferredKind =
+    normalizeToolKind(params.toolCall.kind) ?? inferToolKindFromTitle(params.toolCall.title);
   const toolCall = makeToolCallState(
     {
       toolCallId: params.toolCall.toolCallId,
       title: params.toolCall.title,
-      kind: params.toolCall.kind,
+      kind: inferredKind as EffectAcpSchema.ToolKind | undefined,
       status: params.toolCall.status,
       rawInput: params.toolCall.rawInput,
       rawOutput: params.toolCall.rawOutput,
@@ -401,7 +428,7 @@ export function parsePermissionRequest(
     },
     { fallbackStatus: "pending" },
   );
-  const kind = normalizeToolKind(params.toolCall.kind) ?? "unknown";
+  const kind = inferredKind ?? "unknown";
   const detail =
     toolCall?.command ??
     toolCall?.title ??
@@ -481,6 +508,19 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
           rawPayload: params,
         });
       }
+      break;
+    }
+    case "usage_update": {
+      events.push({
+        _tag: "UsageUpdated",
+        payload: {
+          usage: {
+            usedTokens: upd.used,
+            ...(upd.size > 0 ? { maxTokens: upd.size } : {}),
+          },
+        },
+        rawPayload: params,
+      });
       break;
     }
     default:
