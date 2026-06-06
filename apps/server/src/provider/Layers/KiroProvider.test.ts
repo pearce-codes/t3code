@@ -4,7 +4,7 @@ import type {
   ServerProviderModel,
 } from "@t3tools/contracts";
 import type * as EffectAcpSchema from "effect-acp/schema";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import { buildKiroProviderModels } from "./KiroProvider.ts";
 
