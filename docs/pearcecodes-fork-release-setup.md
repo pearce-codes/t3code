@@ -1,8 +1,8 @@
 # Pearcecodes Fork Release Setup
 
-This fork is configured for public GitHub Releases, GitHub-hosted runners,
-macOS signing when Apple credentials are present, and npm publishing under the
-`pearcecodes` npm organization.
+This fork is configured for public GitHub Releases, Blacksmith-backed CI and
+release builds where supported, macOS signing when Apple credentials are
+present, and npm publishing under the `pearcecodes` npm organization.
 
 ## P1 release setup
 
@@ -37,9 +37,9 @@ Configure npm trusted publishing for `@pearcecodes/t3code`:
 - Repository: `pearce-codes/t3code`
 - Workflow file: `.github/workflows/release.yml`
 
-The workflow currently uses GitHub-hosted runners for all jobs. If self-hosted
-runners are reintroduced later, keep `publish_cli` on `ubuntu-24.04` unless npm
-Trusted Publishing adds self-hosted runner support.
+The workflow uses Blacksmith runners for preflight and supported desktop build
+jobs. Keep `publish_cli` on GitHub's `ubuntu-24.04` runner unless npm Trusted
+Publishing adds self-hosted runner support.
 
 ### Apple signing and notarization
 

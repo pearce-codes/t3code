@@ -15,6 +15,7 @@ This document covers the unified release workflow for stable and nightly desktop
   - macOS `arm64` DMG
   - macOS `x64` DMG
   - Linux `x64` AppImage
+- Uses Blacksmith for release preflight, Linux packaging, Apple Silicon macOS packaging, GitHub Release publishing, and stable finalization. The Intel macOS artifact remains on GitHub's `macos-15-intel` runner, and npm publishing remains on GitHub's `ubuntu-24.04` runner because npm Trusted Publishing does not support self-hosted runners.
 - Publishes one GitHub Release with all produced files.
   - Stable tags with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
   - Only plain stable `X.Y.Z` releases are marked as the repository's latest release.

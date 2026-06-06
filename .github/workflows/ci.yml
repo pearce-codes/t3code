@@ -9,7 +9,7 @@ on:
 jobs:
   check:
     name: Check
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -29,7 +29,7 @@ jobs:
         run: vp check
 
       - name: Typecheck
-        run: vpr typecheck
+        run: vp run typecheck
 
       - name: Build desktop pipeline
         run: vp run build:desktop
@@ -41,7 +41,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -62,7 +62,7 @@ jobs:
 
   test_browser:
     name: Test Browser
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -108,7 +108,7 @@ jobs:
 
   mobile_native_static_analysis:
     name: Mobile Native Static Analysis
-    runs-on: macos-15
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -129,7 +129,7 @@ jobs:
 
   release_smoke:
     name: Release Smoke
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
       - name: Checkout
