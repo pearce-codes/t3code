@@ -13,6 +13,7 @@
  */
 import type {
   ProviderInterruptTurnInput,
+  ProviderCompactConversationInput,
   ProviderInstanceId,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
@@ -56,6 +57,13 @@ export interface ProviderServiceShape {
    */
   readonly interruptTurn: (
     input: ProviderInterruptTurnInput,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Request provider-side conversation compaction.
+   */
+  readonly compactConversation: (
+    input: ProviderCompactConversationInput,
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**

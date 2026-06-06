@@ -1,6 +1,6 @@
 import { DiffsHighlighter, getSharedHighlighter, SupportedLanguages } from "@pierre/diffs";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import type { ServerProviderSkill } from "@t3tools/contracts";
+import type { EditorLaunchContext, ServerProviderSkill } from "@t3tools/contracts";
 import React, {
   Children,
   Suspense,
@@ -62,6 +62,7 @@ interface ChatMarkdownProps {
   cwd: string | undefined;
   isStreaming?: boolean;
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
+  launchContext?: EditorLaunchContext | undefined;
 }
 
 const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
@@ -283,6 +284,7 @@ interface MarkdownFileLinkProps {
   filePath: string;
   label: string;
   theme: "light" | "dark";
+  launchContext?: EditorLaunchContext | undefined;
   className?: string | undefined;
 }
 
@@ -374,6 +376,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   filePath,
   label,
   theme,
+  launchContext,
   className,
 }: MarkdownFileLinkProps) {
   const handleOpen = useCallback(() => {
@@ -386,7 +389,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       return;
     }
 
-    void openInPreferredEditor(api, targetPath).catch((error) => {
+    void openInPreferredEditor(api, targetPath, launchContext).catch((error) => {
       toastManager.add(
         stackedThreadToast({
           type: "error",
@@ -395,7 +398,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         }),
       );
     });
-  }, [targetPath]);
+  }, [launchContext, targetPath]);
 
   const handleCopy = useCallback((value: string, title: string) => {
     if (typeof window === "undefined" || !navigator.clipboard?.writeText) {
@@ -508,6 +511,7 @@ function areMarkdownFileLinkPropsEqual(
     previous.filePath === next.filePath &&
     previous.label === next.label &&
     previous.theme === next.theme &&
+    previous.launchContext === next.launchContext &&
     previous.className === next.className
   );
 }
@@ -517,6 +521,7 @@ function ChatMarkdown({
   cwd,
   isStreaming = false,
   skills = EMPTY_MARKDOWN_SKILLS,
+  launchContext,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
@@ -576,6 +581,7 @@ function ChatMarkdown({
             filePath={fileLinkMeta.filePath}
             label={labelParts.join(" · ")}
             theme={resolvedTheme}
+            launchContext={launchContext}
             className={props.className}
           />
         );
@@ -606,6 +612,7 @@ function ChatMarkdown({
       diffThemeName,
       fileLinkParentSuffixByPath,
       isStreaming,
+      launchContext,
       markdownFileLinkMetaByHref,
       resolvedTheme,
       skills,

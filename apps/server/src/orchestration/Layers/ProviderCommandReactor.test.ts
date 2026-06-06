@@ -28,7 +28,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "@t3tools/contracts";
@@ -218,6 +218,9 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     const interruptTurn = vi.fn((_: unknown) => Effect.void);
+    const compactConversation = vi.fn<ProviderServiceShape["compactConversation"]>(
+      () => Effect.void,
+    );
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
     const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
     const stopSession = vi.fn((input: unknown) =>
@@ -286,6 +289,7 @@ describe("ProviderCommandReactor", () => {
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
+      compactConversation,
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
@@ -401,6 +405,7 @@ describe("ProviderCommandReactor", () => {
       startSession,
       sendTurn,
       interruptTurn,
+      compactConversation,
       respondToRequest,
       respondToUserInput,
       stopSession,
@@ -451,6 +456,232 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("seeds Kiro branched threads from the latest compaction boundary", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        instanceId: ProviderInstanceId.make("kiro"),
+        model: "claude-sonnet-4-5",
+      },
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-source-turn-start"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("source-user-message"),
+          role: "user",
+          text: "my favorite number is 7",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:01:00.000Z",
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.delta",
+        commandId: CommandId.make("cmd-source-assistant-delta"),
+        threadId: ThreadId.make("thread-1"),
+        messageId: asMessageId("source-assistant-message"),
+        delta: "Echo 7 received. How can I help?",
+        turnId: asTurnId("source-turn"),
+        createdAt: "2026-01-01T00:02:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId: CommandId.make("cmd-source-assistant-complete"),
+        threadId: ThreadId.make("thread-1"),
+        messageId: asMessageId("source-assistant-message"),
+        turnId: asTurnId("source-turn"),
+        createdAt: "2026-01-01T00:02:01.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-source-compaction"),
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make("activity-source-compaction"),
+          tone: "info",
+          kind: "context-compaction",
+          summary: "Context compacted",
+          payload: {
+            detail: "Earlier context summary: favorite number is 7.",
+          },
+          turnId: asTurnId("source-turn"),
+          createdAt: "2026-01-01T00:02:30.000Z",
+        },
+        createdAt: "2026-01-01T00:02:30.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.branch",
+        commandId: CommandId.make("cmd-branch-thread"),
+        sourceThreadId: ThreadId.make("thread-1"),
+        threadId: ThreadId.make("thread-branch"),
+        createdAt: "2026-01-01T00:03:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-branch-turn-start"),
+        threadId: ThreadId.make("thread-branch"),
+        message: {
+          messageId: asMessageId("branch-user-message"),
+          role: "user",
+          text: "what is my favorite number?",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:04:00.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      threadId: ThreadId.make("thread-branch"),
+      provider: ProviderDriverKind.make("kiro"),
+    });
+    expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
+      threadId: ThreadId.make("thread-branch"),
+      input: "what is my favorite number?",
+      transcriptContext: [
+        {
+          role: "system",
+          text: "Context compacted: Earlier context summary: favorite number is 7.",
+        },
+      ],
+    });
+  });
+
+  it("does not seed pre-compaction Kiro messages when the compact detail is only progress text", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        instanceId: ProviderInstanceId.make("kiro"),
+        model: "auto",
+      },
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-source-turn-start-progress"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("source-user-message-progress"),
+          role: "user",
+          text: "my favorite color is yellow",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:01:00.000Z",
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.delta",
+        commandId: CommandId.make("cmd-source-assistant-delta-progress"),
+        threadId: ThreadId.make("thread-1"),
+        messageId: asMessageId("source-assistant-message-progress"),
+        delta: "I will not include yellow in future compaction summaries.",
+        turnId: asTurnId("source-turn-progress"),
+        createdAt: "2026-01-01T00:02:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId: CommandId.make("cmd-source-assistant-complete-progress"),
+        threadId: ThreadId.make("thread-1"),
+        messageId: asMessageId("source-assistant-message-progress"),
+        turnId: asTurnId("source-turn-progress"),
+        createdAt: "2026-01-01T00:02:01.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-source-compaction-progress"),
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make("activity-source-compaction-progress"),
+          tone: "info",
+          kind: "context-compaction",
+          summary: "Context compacted",
+          payload: {
+            detail: "Compacting conversation...",
+          },
+          turnId: asTurnId("source-turn-progress"),
+          createdAt: "2026-01-01T00:03:00.000Z",
+        },
+        createdAt: "2026-01-01T00:03:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.branch",
+        commandId: CommandId.make("cmd-branch-thread-progress"),
+        sourceThreadId: ThreadId.make("thread-1"),
+        threadId: ThreadId.make("thread-branch-progress"),
+        createdAt: "2026-01-01T00:04:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-branch-turn-start-progress"),
+        threadId: ThreadId.make("thread-branch-progress"),
+        message: {
+          messageId: asMessageId("branch-user-message-progress"),
+          role: "user",
+          text: "what is my favorite color?",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:05:00.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    const branchInput = harness.sendTurn.mock.calls[1]?.[0] as
+      | {
+          readonly transcriptContext?: ReadonlyArray<{
+            readonly role: "user" | "assistant" | "system";
+            readonly text: string;
+          }>;
+        }
+      | undefined;
+    expect(branchInput).toMatchObject({
+      threadId: ThreadId.make("thread-branch-progress"),
+      input: "what is my favorite color?",
+      transcriptContext: [
+        {
+          role: "system",
+          text: "Context compacted",
+        },
+      ],
+    });
+    expect(JSON.stringify(branchInput?.transcriptContext)).not.toContain("yellow");
+    expect(JSON.stringify(branchInput?.transcriptContext)).not.toContain("Compacting conversation");
   });
 
   it("generates a thread title on the first turn", async () => {
@@ -1546,6 +1777,43 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
     expect(harness.interruptTurn.mock.calls[0]?.[0]).toEqual({
+      threadId: "thread-1",
+    });
+  });
+
+  it("reacts to thread.context.compact by calling provider compaction", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-compact"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.context.compact",
+        commandId: CommandId.make("cmd-context-compact"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.compactConversation.mock.calls.length === 1);
+    expect(harness.compactConversation.mock.calls[0]?.[0]).toEqual({
       threadId: "thread-1",
     });
   });

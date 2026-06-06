@@ -10,6 +10,7 @@
 import type {
   ApprovalRequestId,
   ProviderApprovalDecision,
+  ProviderCompactConversationInput,
   ProviderDriverKind,
   ProviderUserInputAnswers,
   ProviderRuntimeEvent,
@@ -67,6 +68,13 @@ export interface ProviderAdapterShape<TError> {
    * Interrupt an active turn.
    */
   readonly interruptTurn: (threadId: ThreadId, turnId?: TurnId) => Effect.Effect<void, TError>;
+
+  /**
+   * Request provider-side conversation compaction for the active session.
+   */
+  readonly compactConversation: (
+    input: ProviderCompactConversationInput,
+  ) => Effect.Effect<void, TError>;
 
   /**
    * Respond to an interactive approval request.

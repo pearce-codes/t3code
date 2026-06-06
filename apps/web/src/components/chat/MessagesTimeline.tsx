@@ -1,4 +1,5 @@
 import {
+  type EditorLaunchContext,
   type EnvironmentId,
   type MessageId,
   type ServerProviderSkill,
@@ -16,15 +17,22 @@ import {
   type ReactNode,
 } from "react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
+import { FileDiff } from "@pierre/diffs/react";
 import { deriveTimelineEntries, formatElapsed } from "../../session-logic";
 import { type TurnDiffSummary } from "../../types";
 import { summarizeTurnDiffStats } from "../../lib/turnDiffTree";
+import {
+  getRenderablePatch,
+  resolveDiffThemeName,
+  resolveFileDiffPath,
+} from "../../lib/diffRendering";
 import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
   CheckIcon,
   CircleAlertIcon,
   EyeIcon,
+  GitBranchIcon,
   GlobeIcon,
   HammerIcon,
   type LucideIcon,
@@ -67,6 +75,11 @@ import {
 } from "./userMessageTerminalContexts";
 import { SkillInlineText } from "./SkillInlineText";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
+import {
+  buildReviewCommentRenderablePatch,
+  parseReviewCommentMessageSegments,
+  type ReviewCommentContext,
+} from "../../reviewCommentContext";
 
 // ---------------------------------------------------------------------------
 // Context — shared state consumed by every row component via Context.
@@ -79,11 +92,13 @@ interface TimelineRowSharedState {
   timestampFormat: TimestampFormat;
   routeThreadKey: string;
   markdownCwd: string | undefined;
+  markdownLaunchContext?: EditorLaunchContext | undefined;
   resolvedTheme: "light" | "dark";
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
   onRevertUserMessage: (messageId: MessageId) => void;
+  onBranchAssistantMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
 }
@@ -117,10 +132,12 @@ interface MessagesTimelineProps {
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
+  onBranchAssistantMessage: (messageId: MessageId) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
   markdownCwd: string | undefined;
+  markdownLaunchContext?: EditorLaunchContext | undefined;
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
@@ -146,10 +163,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenTurnDiff,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
+  onBranchAssistantMessage,
   isRevertingCheckpoint,
   onImageExpand,
   activeThreadEnvironmentId,
   markdownCwd,
+  markdownLaunchContext,
   resolvedTheme,
   timestampFormat,
   workspaceRoot,
@@ -213,11 +232,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       timestampFormat,
       routeThreadKey,
       markdownCwd,
+      markdownLaunchContext,
       resolvedTheme,
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
       onRevertUserMessage,
+      onBranchAssistantMessage,
       onImageExpand,
       onOpenTurnDiff,
     }),
@@ -225,11 +246,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       timestampFormat,
       routeThreadKey,
       markdownCwd,
+      markdownLaunchContext,
       resolvedTheme,
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
       onRevertUserMessage,
+      onBranchAssistantMessage,
       onImageExpand,
       onOpenTurnDiff,
     ],
@@ -419,6 +442,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         <ChatMarkdown
           text={messageText}
           cwd={ctx.markdownCwd}
+          launchContext={ctx.markdownLaunchContext}
           isStreaming={Boolean(row.message.streaming)}
           skills={ctx.skills}
         />
@@ -444,7 +468,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
               )
             )}
           </p>
-          <AssistantCopyButton row={row} />
+          <AssistantMessageActions row={row} />
         </div>
       </div>
     </>
@@ -463,25 +487,50 @@ function AssistantCompletionDivider({ completionSummary }: { completionSummary: 
   );
 }
 
-function AssistantCopyButton({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
+function AssistantMessageActions({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
+  const ctx = use(TimelineRowCtx);
   const assistantCopyState = resolveAssistantMessageCopyState({
     text: row.message.text ?? null,
     showCopyButton: row.showAssistantCopyButton,
     streaming: row.assistantCopyStreaming,
   });
+  const showBranchButton = row.showAssistantCopyButton && !row.assistantCopyStreaming;
 
-  if (!assistantCopyState.visible) {
+  if (!assistantCopyState.visible && !showBranchButton) {
     return null;
   }
 
   return (
-    <div className="flex items-center opacity-0 transition-opacity duration-200  group-hover/assistant:opacity-100">
-      <MessageCopyButton
-        text={assistantCopyState.text ?? ""}
-        size="icon-xs"
-        variant="outline"
-        className="border-border/50 bg-background/35 text-muted-foreground/45 shadow-none hover:border-border/70 hover:bg-background/55 hover:text-muted-foreground/70"
-      />
+    <div className="flex items-center gap-1 opacity-0 transition-opacity duration-200 group-hover/assistant:opacity-100">
+      {assistantCopyState.visible ? (
+        <MessageCopyButton
+          text={assistantCopyState.text ?? ""}
+          size="icon-xs"
+          variant="outline"
+          className="border-border/50 bg-background/35 text-muted-foreground/45 shadow-none hover:border-border/70 hover:bg-background/55 hover:text-muted-foreground/70"
+        />
+      ) : null}
+      {showBranchButton ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                aria-label="Branch from message"
+                onClick={() => ctx.onBranchAssistantMessage(row.message.id)}
+                type="button"
+                size="icon-xs"
+                variant="outline"
+                className="border-border/50 bg-background/35 text-muted-foreground/45 shadow-none hover:border-border/70 hover:bg-background/55 hover:text-muted-foreground/70"
+              />
+            }
+          >
+            <GitBranchIcon className="size-3" />
+          </TooltipTrigger>
+          <TooltipPopup>
+            <p>Branch from this message</p>
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
     </div>
   );
 }
@@ -499,6 +548,7 @@ function ProposedPlanTimelineRow({
         planMarkdown={row.proposedPlan.planMarkdown}
         environmentId={ctx.activeThreadEnvironmentId}
         cwd={ctx.markdownCwd}
+        launchContext={ctx.markdownLaunchContext}
         workspaceRoot={ctx.workspaceRoot}
       />
     </div>
@@ -837,6 +887,25 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   terminalContexts: ParsedTerminalContextEntry[];
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
 }) {
+  const reviewCommentSegments = parseReviewCommentMessageSegments(props.text);
+  if (reviewCommentSegments.some((segment) => segment.kind === "review-comment")) {
+    return (
+      <div className="space-y-3 text-sm leading-relaxed text-foreground">
+        {reviewCommentSegments.map((segment) =>
+          segment.kind === "text" ? (
+            segment.text.trim().length > 0 ? (
+              <div key={segment.id} className="whitespace-pre-wrap wrap-break-word">
+                <SkillInlineText text={segment.text.trim()} skills={props.skills} />
+              </div>
+            ) : null
+          ) : (
+            <UserMessageReviewCommentCard key={segment.comment.id} comment={segment.comment} />
+          ),
+        )}
+      </div>
+    );
+  }
+
   if (props.terminalContexts.length > 0) {
     const hasEmbeddedInlineLabels = textContainsInlineTerminalContextLabels(
       props.text,
@@ -929,6 +998,49 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     </div>
   );
 });
+
+function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentContext }) {
+  const ctx = use(TimelineRowCtx);
+  const renderablePatch = getRenderablePatch(
+    buildReviewCommentRenderablePatch(comment),
+    `review-comment:${comment.id}`,
+  );
+
+  return (
+    <div className="space-y-2 rounded-lg border border-border/70 bg-background/70 p-3">
+      <div className="space-y-1">
+        <div className="text-xs font-medium text-foreground">
+          {formatWorkspaceRelativePath(comment.filePath, ctx.workspaceRoot)}
+        </div>
+        <div className="text-[11px] text-muted-foreground">
+          {comment.sectionTitle} · {comment.rangeLabel}
+        </div>
+      </div>
+      {comment.text.length > 0 && (
+        <div className="whitespace-pre-wrap wrap-break-word text-sm">
+          <SkillInlineText text={comment.text} skills={ctx.skills} />
+        </div>
+      )}
+      {renderablePatch?.kind === "files" &&
+        renderablePatch.files.map((fileDiff) => (
+          <FileDiff
+            key={resolveFileDiffPath(fileDiff)}
+            fileDiff={fileDiff}
+            options={{
+              collapsed: false,
+              diffStyle: "unified",
+              theme: resolveDiffThemeName(ctx.resolvedTheme),
+            }}
+          />
+        ))}
+      {renderablePatch?.kind === "raw" && (
+        <pre className="overflow-x-auto rounded-md bg-muted/40 p-2 text-xs">
+          {renderablePatch.text}
+        </pre>
+      )}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Structural sharing — reuse old row references when data hasn't changed

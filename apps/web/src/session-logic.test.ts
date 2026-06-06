@@ -5,9 +5,10 @@ import {
   TurnId,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
+  canAutoOpenPlanSidebarForLatestTurnState,
   deriveCompletionDividerBeforeEntryId,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
@@ -22,6 +23,8 @@ import {
   isLatestTurnSettled,
 } from "./session-logic";
 
+let nextActivityId = 0;
+
 function makeActivity(overrides: {
   id?: string;
   createdAt?: string;
@@ -34,7 +37,7 @@ function makeActivity(overrides: {
 }): OrchestrationThreadActivity {
   const payload = overrides.payload ?? {};
   return {
-    id: EventId.make(overrides.id ?? crypto.randomUUID()),
+    id: EventId.make(overrides.id ?? `activity-${nextActivityId++}`),
     createdAt: overrides.createdAt ?? "2026-02-23T00:00:00.000Z",
     kind: overrides.kind ?? "tool.started",
     summary: overrides.summary ?? "Tool call",
@@ -1453,6 +1456,16 @@ describe("isLatestTurnSettled", () => {
         null,
       ),
     ).toBe(false);
+  });
+});
+
+describe("canAutoOpenPlanSidebarForLatestTurnState", () => {
+  it("allows automatic expansion only for running or completed turns", () => {
+    expect(canAutoOpenPlanSidebarForLatestTurnState("running")).toBe(true);
+    expect(canAutoOpenPlanSidebarForLatestTurnState("completed")).toBe(true);
+    expect(canAutoOpenPlanSidebarForLatestTurnState("interrupted")).toBe(false);
+    expect(canAutoOpenPlanSidebarForLatestTurnState("error")).toBe(false);
+    expect(canAutoOpenPlanSidebarForLatestTurnState(null)).toBe(false);
   });
 });
 

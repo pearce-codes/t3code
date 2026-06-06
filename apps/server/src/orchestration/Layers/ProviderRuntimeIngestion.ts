@@ -19,6 +19,7 @@ import {
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
+import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -39,8 +40,6 @@ import {
 import { ServerSettingsService } from "../../serverSettings.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
-const providerCommandId = (event: ProviderRuntimeEvent, tag: string): CommandId =>
-  CommandId.make(`provider:${event.eventId}:${tag}:${crypto.randomUUID()}`);
 
 interface AssistantSegmentState {
   baseKey: string;
@@ -198,18 +197,49 @@ function assistantSegmentBaseKeyFromEvent(event: ProviderRuntimeEvent): string {
   return String(event.itemId ?? event.turnId ?? event.eventId);
 }
 
+function assistantSegmentBaseKeyForTurn(turnId: TurnId, baseKey: string): string {
+  return `turn:${turnId}:${baseKey}`;
+}
+
 function assistantSegmentMessageId(baseKey: string, segmentIndex: number): MessageId {
   return MessageId.make(
     segmentIndex === 0 ? `assistant:${baseKey}` : `assistant:${baseKey}:segment:${segmentIndex}`,
   );
 }
+
+function isMessageFromDifferentTurn(
+  message: OrchestrationMessage | undefined,
+  turnId: TurnId | undefined,
+): boolean {
+  return message !== undefined && turnId !== undefined && !sameId(message.turnId, turnId);
+}
+
+function shouldIgnoreUnscopedAssistantText(
+  event: ProviderRuntimeEvent,
+  turnId: TurnId | undefined,
+) {
+  return event.provider === "kiro" && turnId === undefined;
+}
 function buildContextWindowActivityPayload(
   event: ProviderRuntimeEvent,
 ): ThreadTokenUsageSnapshot | undefined {
-  if (event.type !== "thread.token-usage.updated" || event.payload.usage.usedTokens <= 0) {
+  if (event.type !== "thread.token-usage.updated") {
     return undefined;
   }
-  return event.payload.usage;
+  const usage = event.payload.usage;
+  if (usage.usedTokens > 0) {
+    return usage;
+  }
+  const usedPercentage = usage.usedPercentage;
+  if (
+    typeof usedPercentage === "number" &&
+    Number.isFinite(usedPercentage) &&
+    usedPercentage >= 0 &&
+    usedPercentage <= 100
+  ) {
+    return usage;
+  }
+  return undefined;
 }
 
 function normalizeRuntimeTurnState(
@@ -345,6 +375,26 @@ function runtimeEventToActivities(
       ];
     }
 
+    case "tool.denied": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "error",
+          kind: "tool.denied",
+          summary: `Tool denied: ${event.payload.toolName}`,
+          payload: {
+            toolName: event.payload.toolName,
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
+            ...(event.payload.reason ? { detail: truncateDetail(event.payload.reason) } : {}),
+            ...(event.payload.agentId ? { agentId: event.payload.agentId } : {}),
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "runtime.warning": {
       return [
         {
@@ -352,7 +402,9 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "runtime.warning",
-          summary: "Runtime warning",
+          // Use the adapter-supplied message as the row label so the work log
+          // shows what the warning was about, not a generic "Runtime warning".
+          summary: truncateDetail(event.payload.message, 120),
           payload: {
             message: truncateDetail(event.payload.message),
             ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
@@ -607,11 +659,16 @@ function runtimeEventToActivities(
 }
 
 const make = Effect.gen(function* () {
+  const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
+  const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
+    crypto.randomUUIDv4.pipe(
+      Effect.map((uuid) => CommandId.make(`provider:${event.eventId}:${tag}:${uuid}`)),
+    );
 
   const turnMessageIdsByTurnKey = yield* Cache.make<string, Set<MessageId>>({
     capacity: TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY,
@@ -709,6 +766,22 @@ const make = Effect.gen(function* () {
   const clearAssistantSegmentStateForTurn = (threadId: ThreadId, turnId: TurnId) =>
     Cache.invalidate(assistantSegmentStateByTurnKey, providerTurnKey(threadId, turnId));
 
+  const resolveAssistantSegmentBaseKey = (input: {
+    threadId: ThreadId;
+    event: ProviderRuntimeEvent;
+    turnId: TurnId;
+  }) =>
+    Effect.gen(function* () {
+      const baseKey = assistantSegmentBaseKeyFromEvent(input.event);
+      const candidateMessageId = assistantSegmentMessageId(baseKey, 0);
+      const detailedThread = yield* resolveThreadDetail(input.threadId);
+      const existingMessage = findMessageById(detailedThread?.messages ?? [], candidateMessageId);
+
+      return isMessageFromDifferentTurn(existingMessage, input.turnId)
+        ? assistantSegmentBaseKeyForTurn(input.turnId, baseKey)
+        : baseKey;
+    });
+
   const getActiveAssistantMessageIdForTurn = (threadId: ThreadId, turnId: TurnId) =>
     getAssistantSegmentStateForTurn(threadId, turnId).pipe(
       Effect.map((state) =>
@@ -769,7 +842,11 @@ const make = Effect.gen(function* () {
       return yield* startAssistantSegmentForTurn({
         threadId: input.threadId,
         turnId: input.turnId,
-        baseKey: assistantSegmentBaseKeyFromEvent(input.event),
+        baseKey: yield* resolveAssistantSegmentBaseKey({
+          threadId: input.threadId,
+          event: input.event,
+          turnId: input.turnId,
+        }),
       });
     });
 
@@ -848,7 +925,7 @@ const make = Effect.gen(function* () {
 
       yield* orchestrationEngine.dispatch({
         type: "thread.message.assistant.delta",
-        commandId: providerCommandId(input.event, input.commandTag),
+        commandId: yield* providerCommandId(input.event, input.commandTag),
         threadId: input.threadId,
         messageId: input.messageId,
         delta: bufferedText,
@@ -915,7 +992,7 @@ const make = Effect.gen(function* () {
       if (hasRenderableText) {
         yield* orchestrationEngine.dispatch({
           type: "thread.message.assistant.delta",
-          commandId: providerCommandId(input.event, input.finalDeltaCommandTag),
+          commandId: yield* providerCommandId(input.event, input.finalDeltaCommandTag),
           threadId: input.threadId,
           messageId: input.messageId,
           delta: text,
@@ -927,7 +1004,7 @@ const make = Effect.gen(function* () {
       if (input.hasProjectedMessage || hasRenderableText) {
         yield* orchestrationEngine.dispatch({
           type: "thread.message.assistant.complete",
-          commandId: providerCommandId(input.event, input.commandTag),
+          commandId: yield* providerCommandId(input.event, input.commandTag),
           threadId: input.threadId,
           messageId: input.messageId,
           ...(input.turnId ? { turnId: input.turnId } : {}),
@@ -1003,7 +1080,7 @@ const make = Effect.gen(function* () {
       const existingPlan = findProposedPlanById(input.threadProposedPlans, input.planId);
       yield* orchestrationEngine.dispatch({
         type: "thread.proposed-plan.upsert",
-        commandId: providerCommandId(input.event, "proposed-plan-upsert"),
+        commandId: yield* providerCommandId(input.event, "proposed-plan-upsert"),
         threadId: input.threadId,
         proposedPlan: {
           id: input.planId,
@@ -1159,10 +1236,11 @@ const make = Effect.gen(function* () {
         return;
       }
 
+      const commandUuid = yield* crypto.randomUUIDv4;
       yield* orchestrationEngine.dispatch({
         type: "thread.proposed-plan.upsert",
         commandId: CommandId.make(
-          `provider:source-proposed-plan-implemented:${implementationThreadId}:${crypto.randomUUID()}`,
+          `provider:source-proposed-plan-implemented:${implementationThreadId}:${commandUuid}`,
         ),
         threadId: sourceThread.id,
         proposedPlan: {
@@ -1296,7 +1374,7 @@ const make = Effect.gen(function* () {
 
           yield* orchestrationEngine.dispatch({
             type: "thread.session.set",
-            commandId: providerCommandId(event, "thread-session-set"),
+            commandId: yield* providerCommandId(event, "thread-session-set"),
             threadId: thread.id,
             session: {
               threadId: thread.id,
@@ -1324,6 +1402,9 @@ const make = Effect.gen(function* () {
 
       if (assistantDelta && assistantDelta.length > 0) {
         const turnId = toTurnId(event.turnId);
+        if (shouldIgnoreUnscopedAssistantText(event, turnId)) {
+          return;
+        }
         const assistantMessageId = yield* getOrCreateAssistantMessageId({
           threadId: thread.id,
           event,
@@ -1342,7 +1423,7 @@ const make = Effect.gen(function* () {
           if (spillChunk.length > 0) {
             yield* orchestrationEngine.dispatch({
               type: "thread.message.assistant.delta",
-              commandId: providerCommandId(event, "assistant-delta-buffer-spill"),
+              commandId: yield* providerCommandId(event, "assistant-delta-buffer-spill"),
               threadId: thread.id,
               messageId: assistantMessageId,
               delta: spillChunk,
@@ -1353,7 +1434,7 @@ const make = Effect.gen(function* () {
         } else {
           yield* orchestrationEngine.dispatch({
             type: "thread.message.assistant.delta",
-            commandId: providerCommandId(event, "assistant-delta"),
+            commandId: yield* providerCommandId(event, "assistant-delta"),
             threadId: thread.id,
             messageId: assistantMessageId,
             delta: assistantDelta,
@@ -1440,9 +1521,17 @@ const make = Effect.gen(function* () {
           : Option.none<MessageId>();
         const hasAssistantMessagesForTurn =
           turnId !== undefined ? hasAssistantMessageForTurn(messages, turnId) : false;
-        const assistantMessageId = Option.getOrElse(
-          activeAssistantMessageId,
-          () => assistantCompletion.messageId,
+        const completionMessageFromDifferentTurn = isMessageFromDifferentTurn(
+          findMessageById(messages, assistantCompletion.messageId),
+          turnId,
+        );
+        const assistantMessageId = Option.getOrElse(activeAssistantMessageId, () =>
+          completionMessageFromDifferentTurn && turnId !== undefined
+            ? assistantSegmentMessageId(
+                assistantSegmentBaseKeyForTurn(turnId, assistantSegmentBaseKeyFromEvent(event)),
+                0,
+              )
+            : assistantCompletion.messageId,
         );
         const existingAssistantMessage = findMessageById(messages, assistantMessageId);
         const shouldApplyFallbackCompletionText =
@@ -1453,8 +1542,13 @@ const make = Effect.gen(function* () {
           turnId !== undefined &&
           hasAssistantMessagesForTurn &&
           (assistantCompletion.fallbackText?.trim().length ?? 0) === 0;
+        const shouldSkipStaleCompletionCollision =
+          Option.isNone(activeAssistantMessageId) &&
+          turnId !== undefined &&
+          completionMessageFromDifferentTurn &&
+          (assistantCompletion.fallbackText?.trim().length ?? 0) === 0;
 
-        if (!shouldSkipRedundantCompletion) {
+        if (!shouldSkipRedundantCompletion && !shouldSkipStaleCompletionCollision) {
           if (turnId && Option.isNone(activeAssistantMessageId)) {
             yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
           }
@@ -1546,7 +1640,7 @@ const make = Effect.gen(function* () {
         if (shouldApplyRuntimeError) {
           yield* orchestrationEngine.dispatch({
             type: "thread.session.set",
-            commandId: providerCommandId(event, "runtime-error-session-set"),
+            commandId: yield* providerCommandId(event, "runtime-error-session-set"),
             threadId: thread.id,
             session: {
               threadId: thread.id,
@@ -1568,7 +1662,7 @@ const make = Effect.gen(function* () {
       if (event.type === "thread.metadata.updated" && event.payload.name) {
         yield* orchestrationEngine.dispatch({
           type: "thread.meta.update",
-          commandId: providerCommandId(event, "thread-meta-update"),
+          commandId: yield* providerCommandId(event, "thread-meta-update"),
           threadId: thread.id,
           title: event.payload.name,
         });
@@ -1596,7 +1690,7 @@ const make = Effect.gen(function* () {
             );
             yield* orchestrationEngine.dispatch({
               type: "thread.turn.diff.complete",
-              commandId: providerCommandId(event, "thread-turn-diff-complete"),
+              commandId: yield* providerCommandId(event, "thread-turn-diff-complete"),
               threadId: thread.id,
               turnId,
               completedAt: now,
@@ -1613,13 +1707,17 @@ const make = Effect.gen(function* () {
 
       const activities = runtimeEventToActivities(event);
       yield* Effect.forEach(activities, (activity) =>
-        orchestrationEngine.dispatch({
-          type: "thread.activity.append",
-          commandId: providerCommandId(event, "thread-activity-append"),
-          threadId: thread.id,
-          activity,
-          createdAt: activity.createdAt,
-        }),
+        providerCommandId(event, "thread-activity-append").pipe(
+          Effect.flatMap((commandId) =>
+            orchestrationEngine.dispatch({
+              type: "thread.activity.append",
+              commandId,
+              threadId: thread.id,
+              activity,
+              createdAt: activity.createdAt,
+            }),
+          ),
+        ),
       ).pipe(Effect.asVoid);
     });
 

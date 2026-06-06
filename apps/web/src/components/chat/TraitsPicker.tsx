@@ -238,6 +238,14 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     },
     [instanceId, model, persistence, provider, setProviderModelOptions],
   );
+  const visibilityInput = {
+    provider,
+    models,
+    model,
+    prompt,
+    modelOptions,
+    allowPromptInjectedEffort,
+  };
   const {
     descriptors,
     selectDescriptors,
@@ -246,14 +254,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     ultrathinkPromptControlled,
     ultrathinkInBodyText,
     hasAnyControls,
-  } = getTraitsSectionVisibility({
-    provider,
-    models,
-    model,
-    prompt,
-    modelOptions,
-    allowPromptInjectedEffort,
-  });
+  } = getTraitsSectionVisibility(visibilityInput);
   const updateDescriptors = (nextDescriptors: ReadonlyArray<ProviderOptionDescriptor>) => {
     updateModelOptions(buildProviderOptionSelectionsFromDescriptors(nextDescriptors));
   };
@@ -359,44 +360,37 @@ export const TraitsPicker = memo(function TraitsPicker({
   ...persistence
 }: TraitsMenuContentProps & TraitsPersistence) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const visibilityInput = {
+    provider,
+    models,
+    model,
+    prompt,
+    modelOptions,
+    allowPromptInjectedEffort,
+  };
   const { descriptors, primarySelectDescriptor, ultrathinkPromptControlled } =
-    getTraitsSectionVisibility({
-      provider,
-      models,
-      model,
-      prompt,
-      modelOptions,
-      allowPromptInjectedEffort,
-    });
-  if (
-    !shouldRenderTraitsControls({
-      provider,
-      models,
-      model,
-      prompt,
-      modelOptions,
-      allowPromptInjectedEffort,
-    })
-  ) {
+    getTraitsSectionVisibility(visibilityInput);
+  if (!shouldRenderTraitsControls(visibilityInput)) {
     return null;
   }
 
-  const triggerLabel =
-    descriptors
-      .map((descriptor) => {
-        if (ultrathinkPromptControlled && descriptor.id === primarySelectDescriptor?.id) {
-          return "Ultrathink";
-        }
-        if (descriptor.type === "boolean") {
-          if (descriptor.id === "fastMode") {
-            return descriptor.currentValue === true ? "Fast" : "Normal";
-          }
-          return `${descriptor.label} ${descriptor.currentValue === true ? "On" : "Off"}`;
-        }
-        return getProviderOptionCurrentLabel(descriptor);
-      })
-      .filter((label): label is string => typeof label === "string" && label.length > 0)
-      .join(" · ") || "";
+  const triggerLabels: Array<string> = [];
+  for (const descriptor of descriptors) {
+    const label =
+      ultrathinkPromptControlled && descriptor.id === primarySelectDescriptor?.id
+        ? "Ultrathink"
+        : descriptor.type === "boolean"
+          ? descriptor.id === "fastMode"
+            ? descriptor.currentValue === true
+              ? "Fast"
+              : "Normal"
+            : `${descriptor.label} ${descriptor.currentValue === true ? "On" : "Off"}`
+          : getProviderOptionCurrentLabel(descriptor);
+    if (typeof label === "string" && label.length > 0) {
+      triggerLabels.push(label);
+    }
+  }
+  const triggerLabel = triggerLabels.join(" · ");
 
   const isCodexStyle = provider === "codex";
 

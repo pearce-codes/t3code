@@ -64,7 +64,7 @@ import { usePrimaryEnvironmentId } from "../environments/primary";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { isMacPlatform, newCommandId } from "../lib/utils";
+import { isMacPlatform, newCommandId, newThreadId } from "../lib/utils";
 import {
   selectProjectByRef,
   selectProjectsAcrossEnvironments,
@@ -73,7 +73,8 @@ import {
   selectThreadByRef,
   useStore,
 } from "../store";
-import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
+import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
+import { useThreadRunningTerminalIds } from "../terminalSessionState";
 import { useUiStateStore } from "../uiStateStore";
 import {
   resolveShortcutCommand,
@@ -85,7 +86,7 @@ import {
 } from "../keybindings";
 import { useModelPickerOpen } from "../modelPickerOpenState";
 import { useShortcutModifierState } from "../shortcutModifierState";
-import { useGitStatus } from "../lib/gitStatusState";
+import { useVcsStatus } from "../lib/vcsStatusState";
 import { readLocalApi } from "../localApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
@@ -342,10 +343,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const threadKey = scopedThreadKey(threadRef);
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
-  const runningTerminalIds = useTerminalStateStore(
-    (state) =>
-      selectThreadTerminalState(state.terminalStateByThreadKey, threadRef).runningTerminalIds,
-  );
+  const runningTerminalIds = useThreadRunningTerminalIds({
+    environmentId: thread.environmentId,
+    threadId: thread.id,
+  });
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const isRemoteThread =
     primaryEnvironmentId !== null && thread.environmentId !== primaryEnvironmentId;
@@ -370,7 +371,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     ),
   );
   const gitCwd = thread.worktreePath ?? threadProjectCwd ?? props.projectCwd;
-  const gitStatus = useGitStatus({
+  const gitStatus = useVcsStatus({
     environmentId: thread.environmentId,
     cwd: thread.branch != null ? gitCwd : null,
   });
@@ -680,11 +681,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       render={
                         <span
                           aria-label={threadEnvironmentLabel ?? "Remote"}
-                          className="inline-flex h-5 items-center justify-center"
+                          className="inline-flex items-center justify-center"
                         />
                       }
                     >
-                      <CloudIcon className="block size-3 text-muted-foreground/60" />
+                      <CloudIcon className="size-3 text-muted-foreground/40" />
                     </TooltipTrigger>
                     <TooltipPopup side="top">{threadEnvironmentLabel}</TooltipPopup>
                   </Tooltip>
@@ -809,7 +810,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
   return (
     <SidebarMenuSub
       ref={attachThreadListAutoAnimateRef}
-      className="mx-1 my-0 w-full translate-x-0 gap-0.5 overflow-hidden px-1.5 py-0"
+      className="mx-0.5 my-0 w-full translate-x-0 gap-0.5 overflow-hidden px-1 py-0 sm:mx-1 sm:px-1.5"
     >
       {shouldShowThreadPanel && showEmptyThreadState ? (
         <SidebarMenuSubItem className="w-full" data-thread-selection-safe>
@@ -1915,6 +1916,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         [
           { id: "rename", label: "Rename thread" },
           { id: "mark-unread", label: "Mark unread" },
+          { id: "branch", label: "Branch thread" },
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
           { id: "delete", label: "Delete", destructive: true },
@@ -1931,6 +1933,44 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
       if (clicked === "mark-unread") {
         markThreadUnread(threadKey, thread.latestTurn?.completedAt);
+        return;
+      }
+      if (clicked === "branch") {
+        const environmentApi = readEnvironmentApi(threadRef.environmentId);
+        if (!environmentApi) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to branch thread",
+              description: "Thread API unavailable.",
+            }),
+          );
+          return;
+        }
+
+        const branchThreadRef = scopeThreadRef(threadRef.environmentId, newThreadId());
+        try {
+          await environmentApi.orchestration.dispatchCommand({
+            type: "thread.branch",
+            commandId: newCommandId(),
+            sourceThreadId: threadRef.threadId,
+            threadId: branchThreadRef.threadId,
+            title: `${thread.title} (Branched)`,
+            createdAt: new Date().toISOString(),
+          });
+          await router.navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(branchThreadRef),
+          });
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to branch thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
         return;
       }
       if (clicked === "copy-path") {
@@ -1973,6 +2013,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       markThreadUnread,
       memberProjectByScopedKey,
       project.cwd,
+      router,
     ],
   );
 
@@ -2237,16 +2278,16 @@ const SidebarProjectListRow = memo(function SidebarProjectListRow(props: Sidebar
   );
 });
 
-function T3Wordmark() {
+function PCWordmark() {
   return (
     <svg
-      aria-label="T3"
+      aria-label="PC"
       className="h-2.5 w-auto shrink-0 text-foreground"
-      viewBox="15.5309 37 94.3941 56.96"
+      viewBox="0 -1 99 58"
       xmlns="http://www.w3.org/2000/svg"
     >
       <path
-        d="M33.4509 93V47.56H15.5309V37H64.3309V47.56H46.4109V93H33.4509ZM86.7253 93.96C82.832 93.96 78.9653 93.4533 75.1253 92.44C71.2853 91.3733 68.032 89.88 65.3653 87.96L70.4053 78.04C72.5386 79.5867 75.0186 80.8133 77.8453 81.72C80.672 82.6267 83.5253 83.08 86.4053 83.08C89.6586 83.08 92.2186 82.44 94.0853 81.16C95.952 79.88 96.8853 78.12 96.8853 75.88C96.8853 73.7467 96.0586 72.0667 94.4053 70.84C92.752 69.6133 90.0853 69 86.4053 69H80.4853V60.44L96.0853 42.76L97.5253 47.4H68.1653V37H107.365V45.4L91.8453 63.08L85.2853 59.32H89.0453C95.9253 59.32 101.125 60.8667 104.645 63.96C108.165 67.0533 109.925 71.0267 109.925 75.88C109.925 79.0267 109.099 81.9867 107.445 84.76C105.792 87.48 103.259 89.6933 99.8453 91.4C96.432 93.1067 92.0586 93.96 86.7253 93.96Z"
+        d="M5.376 56V0.56H29.376C34.336 0.56 38.576 1.36 42.096 2.96C45.6693 4.56 48.416 6.85333 50.336 9.84C52.256 12.8267 53.216 16.3733 53.216 20.48C53.216 24.5333 52.256 28.0533 50.336 31.04C48.416 33.9733 45.6693 36.2667 42.096 37.92C38.576 39.52 34.336 40.32 29.376 40.32H12.496L18.256 34.48V56H5.376ZM18.256 35.92L12.496 29.76H28.656C32.496 29.76 35.3493 28.96 37.216 27.36C39.136 25.7067 40.096 23.4133 40.096 20.48C40.096 17.4933 39.136 15.2 37.216 13.6C35.3493 11.9467 32.496 11.12 28.656 11.12H12.496L18.256 4.96V35.92ZM75.1869 56.96C70.9203 56.96 66.9469 56.2667 63.2669 54.88C59.6403 53.44 56.4936 51.44 53.8269 48.88C51.2136 46.2667 49.1603 43.2 47.6669 39.68C46.2269 36.16 45.5069 32.32 45.5069 28.16C45.5069 24 46.2269 20.16 47.6669 16.64C49.1603 13.12 51.2403 10.08 53.9069 7.52C56.5736 4.90667 59.7203 2.90667 63.3469 1.52C66.9736 0.08 70.9469 -0.64 75.2669 -0.64C80.0669 -0.64 84.3869 0.186667 88.2269 1.84C92.1203 3.49333 95.3736 5.92 97.9869 9.12L89.7469 16.72C87.8803 14.5867 85.8003 13.0133 83.5069 12C81.2136 10.9333 78.7336 10.4 76.0669 10.4C73.5069 10.4 71.1603 10.8267 69.0269 11.68C66.8936 12.48 65.0536 13.6533 63.5069 15.2C61.9603 16.7467 60.7603 18.6133 59.9069 20.8C59.1069 22.9333 58.7069 25.3867 58.7069 28.16C58.7069 30.88 59.1069 33.3333 59.9069 35.52C60.7603 37.7067 61.9603 39.5733 63.5069 41.12C65.0536 42.6667 66.8936 43.8667 69.0269 44.72C71.1603 45.52 73.5069 45.92 76.0669 45.92C78.7336 45.92 81.2136 45.4133 83.5069 44.4C85.8003 43.3333 87.8803 41.7067 89.7469 39.52L97.9869 47.12C95.3736 50.32 92.1203 52.7733 88.2269 54.48C84.3869 56.1333 80.0403 56.96 75.1869 56.96Z"
         fill="currentColor"
       />
     </svg>
@@ -2460,7 +2501,7 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
               className="ml-1 flex min-w-0 flex-1 cursor-pointer items-center gap-1 rounded-md outline-hidden ring-ring transition-colors hover:text-foreground focus-visible:ring-2"
               to="/"
             >
-              <T3Wordmark />
+              <PCWordmark />
               <span className="truncate text-sm font-medium tracking-tight text-muted-foreground">
                 Code
               </span>
@@ -2926,8 +2967,8 @@ export default function Sidebar() {
     () => ({
       terminalFocus: isTerminalFocused(),
       terminalOpen: routeThreadRef
-        ? selectThreadTerminalState(
-            useTerminalStateStore.getState().terminalStateByThreadKey,
+        ? selectThreadTerminalUiState(
+            useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
             routeThreadRef,
           ).terminalOpen
         : false,
@@ -3134,8 +3175,8 @@ export default function Sidebar() {
     () => ({
       terminalFocus: false,
       terminalOpen: routeThreadRef
-        ? selectThreadTerminalState(
-            useTerminalStateStore.getState().terminalStateByThreadKey,
+        ? selectThreadTerminalUiState(
+            useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
             routeThreadRef,
           ).terminalOpen
         : false,

@@ -1,5 +1,5 @@
 import { ProviderDriverKind, RuntimeRequestId, TurnId } from "@t3tools/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   makeAcpAssistantItemEvent,
@@ -7,6 +7,7 @@ import {
   makeAcpPlanUpdatedEvent,
   makeAcpRequestOpenedEvent,
   makeAcpRequestResolvedEvent,
+  makeAcpTokenUsageUpdatedEvent,
   makeAcpToolCallEvent,
 } from "./AcpCoreRuntimeEvents.ts";
 
@@ -149,6 +150,39 @@ describe("AcpCoreRuntimeEvents", () => {
       payload: {
         itemType: "assistant_message",
         status: "inProgress",
+      },
+    });
+  });
+
+  it("maps ACP usage updates to normalized thread token usage events", () => {
+    const stamp = { eventId: "event-usage" as never, createdAt: "2026-03-27T00:00:00.000Z" };
+    const turnId = TurnId.make("turn-1");
+
+    expect(
+      makeAcpTokenUsageUpdatedEvent({
+        stamp,
+        provider: ProviderDriverKind.make("kiro"),
+        threadId: "thread-1" as never,
+        turnId,
+        usage: {
+          usedTokens: 42_000,
+          maxTokens: 200_000,
+        },
+        rawPayload: { update: { sessionUpdate: "usage_update" } },
+      }),
+    ).toMatchObject({
+      type: "thread.token-usage.updated",
+      provider: "kiro",
+      turnId: "turn-1",
+      payload: {
+        usage: {
+          usedTokens: 42_000,
+          maxTokens: 200_000,
+        },
+      },
+      raw: {
+        source: "acp.jsonrpc",
+        method: "session/update",
       },
     });
   });

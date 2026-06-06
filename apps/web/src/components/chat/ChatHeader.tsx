@@ -1,4 +1,5 @@
 import {
+  type EditorLaunchContext,
   type EnvironmentId,
   type EditorId,
   type ProjectScript,
@@ -26,6 +27,7 @@ interface ChatHeaderProps {
   activeProjectName: string | undefined;
   isGitRepo: boolean;
   openInCwd: string | null;
+  openInLaunchContext?: EditorLaunchContext | undefined;
   activeProjectScripts: ProjectScript[] | undefined;
   preferredScriptId: string | null;
   keybindings: ResolvedKeybindingsConfig;
@@ -48,11 +50,13 @@ export function shouldShowOpenInPicker(input: {
   readonly activeProjectName: string | undefined;
   readonly activeThreadEnvironmentId: EnvironmentId;
   readonly primaryEnvironmentId: EnvironmentId | null;
+  readonly openInLaunchContext?: EditorLaunchContext | undefined;
 }): boolean {
   return (
     Boolean(input.activeProjectName) &&
-    input.primaryEnvironmentId !== null &&
-    input.activeThreadEnvironmentId === input.primaryEnvironmentId
+    ((input.primaryEnvironmentId !== null &&
+      input.activeThreadEnvironmentId === input.primaryEnvironmentId) ||
+      input.openInLaunchContext?.remote?.type === "ssh")
   );
 }
 
@@ -64,6 +68,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeProjectName,
   isGitRepo,
   openInCwd,
+  openInLaunchContext,
   activeProjectScripts,
   preferredScriptId,
   keybindings,
@@ -86,20 +91,24 @@ export const ChatHeader = memo(function ChatHeader({
     activeProjectName,
     activeThreadEnvironmentId,
     primaryEnvironmentId,
+    openInLaunchContext,
   });
 
   return (
-    <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-2">
-      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
+    <div className="@container/header-actions flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 overflow-hidden sm:flex-1 sm:flex-nowrap sm:gap-3">
         <SidebarTrigger className="size-7 shrink-0 md:hidden" />
         <h2
-          className="min-w-0 shrink truncate text-sm font-medium text-foreground"
+          className="min-w-0 flex-1 basis-40 truncate text-sm font-medium text-foreground"
           title={activeThreadTitle}
         >
           {activeThreadTitle}
         </h2>
         {activeProjectName && (
-          <Badge variant="outline" className="min-w-0 shrink overflow-hidden">
+          <Badge
+            variant="outline"
+            className="min-w-0 max-w-full shrink overflow-hidden sm:max-w-56"
+          >
             <span className="min-w-0 truncate">{activeProjectName}</span>
           </Badge>
         )}
@@ -109,7 +118,7 @@ export const ChatHeader = memo(function ChatHeader({
           </Badge>
         )}
       </div>
-      <div className="flex shrink-0 items-center justify-end gap-2 @3xl/header-actions:gap-3">
+      <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 sm:shrink-0 sm:justify-end @3xl/header-actions:gap-3">
         {activeProjectScripts && (
           <ProjectScriptsControl
             scripts={activeProjectScripts}
@@ -126,6 +135,7 @@ export const ChatHeader = memo(function ChatHeader({
             keybindings={keybindings}
             availableEditors={availableEditors}
             openInCwd={openInCwd}
+            launchContext={openInLaunchContext}
           />
         )}
         {activeProjectName && (

@@ -1,7 +1,7 @@
 import "../index.css";
 
-import { page } from "vitest/browser";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { page } from "vite-plus/test/browser";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { render } from "vitest-browser-react";
 
 const { openInPreferredEditorMock, readLocalApiMock } = vi.hoisted(() => ({
@@ -48,7 +48,11 @@ describe("ChatMarkdown", () => {
       await link.click();
 
       await vi.waitFor(() => {
-        expect(openInPreferredEditorMock).toHaveBeenCalledWith(expect.anything(), filePath);
+        expect(openInPreferredEditorMock).toHaveBeenCalledWith(
+          expect.anything(),
+          filePath,
+          undefined,
+        );
       });
     } finally {
       await screen.unmount();
@@ -70,7 +74,11 @@ describe("ChatMarkdown", () => {
       await link.click();
 
       await vi.waitFor(() => {
-        expect(openInPreferredEditorMock).toHaveBeenCalledWith(expect.anything(), `${filePath}:1`);
+        expect(openInPreferredEditorMock).toHaveBeenCalledWith(
+          expect.anything(),
+          `${filePath}:1`,
+          undefined,
+        );
       });
     } finally {
       await screen.unmount();
@@ -95,6 +103,7 @@ describe("ChatMarkdown", () => {
         expect(openInPreferredEditorMock).toHaveBeenCalledWith(
           expect.anything(),
           `${filePath}:1:7`,
+          undefined,
         );
       });
     } finally {

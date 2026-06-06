@@ -122,7 +122,11 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
 
         {/* Instance buttons (one per configured instance — built-in + custom) */}
         {props.instanceEntries.map((entry) => {
-          const isDisabled = !entry.isAvailable || entry.status !== "ready";
+          const isDisabled =
+            !entry.enabled ||
+            !entry.isAvailable ||
+            entry.status === "error" ||
+            entry.models.length === 0;
           const isSelected = props.selectedInstanceId === entry.instanceId;
           const showNewBadge = props.newBadgeInstanceIds?.has(entry.instanceId) ?? false;
           const showInstanceBadge =

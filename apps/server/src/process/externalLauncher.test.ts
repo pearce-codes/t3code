@@ -1,12 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { assertSuccess } from "@effect/vitest/utils";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Random from "effect/Random";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
@@ -236,6 +236,96 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
         command: "webstorm",
         args: ["/tmp/workspace"],
       });
+    }),
+  );
+
+  it.effect("adds VS Code Remote-SSH arguments for ssh launch context", () =>
+    Effect.gen(function* () {
+      const vscodeLaunch = yield* resolveEditorLaunch(
+        {
+          cwd: "/home/pearce/workspace",
+          editor: "vscode",
+          context: {
+            remote: {
+              type: "ssh",
+              authority: "pearce@example.com",
+            },
+          },
+        },
+        "darwin",
+        { PATH: "" },
+      );
+      assert.deepEqual(vscodeLaunch, {
+        command: "code",
+        args: ["--remote", "ssh-remote+pearce@example.com", "/home/pearce/workspace"],
+      });
+
+      const vscodeGotoLaunch = yield* resolveEditorLaunch(
+        {
+          cwd: "/home/pearce/workspace/src/index.ts:12:4",
+          editor: "vscode",
+          context: {
+            remote: {
+              type: "ssh",
+              authority: "devbox",
+            },
+          },
+        },
+        "darwin",
+        { PATH: "" },
+      );
+      assert.deepEqual(vscodeGotoLaunch, {
+        command: "code",
+        args: [
+          "--remote",
+          "ssh-remote+devbox",
+          "--goto",
+          "/home/pearce/workspace/src/index.ts:12:4",
+        ],
+      });
+
+      const insidersLaunch = yield* resolveEditorLaunch(
+        {
+          cwd: "/home/pearce/workspace",
+          editor: "vscode-insiders",
+          context: {
+            remote: {
+              type: "ssh",
+              authority: "devbox",
+            },
+          },
+        },
+        "darwin",
+        { PATH: "" },
+      );
+      assert.deepEqual(insidersLaunch, {
+        command: "code-insiders",
+        args: ["--remote", "ssh-remote+devbox", "/home/pearce/workspace"],
+      });
+    }),
+  );
+
+  it.effect("rejects SSH launch context for editors without Remote-SSH support", () =>
+    Effect.gen(function* () {
+      const result = yield* resolveEditorLaunch(
+        {
+          cwd: "/home/pearce/workspace",
+          editor: "cursor",
+          context: {
+            remote: {
+              type: "ssh",
+              authority: "devbox",
+            },
+          },
+        },
+        "darwin",
+        { PATH: "" },
+      ).pipe(Effect.result);
+
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.equal(result.failure.message, "Cursor does not support SSH remote launch.");
+      }
     }),
   );
 
@@ -651,7 +741,9 @@ it.layer(NodeServices.layer)("launchEditorProcess", (it) => {
     Effect.gen(function* () {
       const spawnerLayer = Layer.mock(ChildProcessSpawner.ChildProcessSpawner, {});
       const result = yield* launchEditorProcess({
-        command: `t3code-no-such-command-${yield* Random.nextUUIDv4}`,
+        command: `t3code-no-such-command-${yield* Crypto.Crypto.pipe(
+          Effect.flatMap((crypto) => crypto.randomUUIDv4),
+        )}`,
         args: [],
       }).pipe(Effect.provide(spawnerLayer), Effect.result);
       assert.equal(result._tag, "Failure");

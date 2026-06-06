@@ -30,7 +30,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -101,6 +101,7 @@ function createProviderServiceHarness() {
     startSession: () => unsupported(),
     sendTurn: () => unsupported(),
     interruptTurn: () => unsupported(),
+    compactConversation: () => unsupported(),
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
@@ -301,7 +302,7 @@ describe("ProviderRuntimeIngestion", () => {
       }),
     );
     provider.setSession({
-      provider: ProviderDriverKind.make("codex"),
+      provider: ProviderDriverKind.make("kiro"),
       status: "ready",
       runtimeMode: "approval-required",
       threadId: ThreadId.make("thread-1"),
@@ -749,6 +750,213 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(message?.text).toBe("assistant-only final text");
     expect(message?.streaming).toBe(false);
+  });
+
+  it("keeps Kiro resume replay and reused item ids out of new turns", async () => {
+    const harness = await createHarness();
+    const oldTurnAt = "2026-06-04T16:20:25.000Z";
+    const resumeAt = "2026-06-04T17:06:22.000Z";
+    const newTurnAt = "2026-06-04T17:06:25.000Z";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-kiro-old-turn-started"),
+      provider: ProviderDriverKind.make("kiro"),
+      createdAt: oldTurnAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-kiro-old"),
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.session?.status === "running" && thread.session?.activeTurnId === "turn-kiro-old",
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-kiro-older-delta"),
+      provider: ProviderDriverKind.make("kiro"),
+      createdAt: oldTurnAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-kiro-old"),
+      itemId: asItemId("assistant:kiro-session:segment:0"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "older answer",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-kiro-older-completed"),
+      provider: ProviderDriverKind.make("kiro"),
+      createdAt: oldTurnAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-kiro-old"),
+      itemId: asItemId("assistant:kiro-session:segment:0"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+      },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-kiro-old-delta"),
+      provider: ProviderDriverKind.make("kiro"),
+      createdAt: oldTurnAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-kiro-old"),
+      itemId: asItemId("assistant:kiro-session:segment:1"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "old answer",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-kiro-old-completed"),
+      provider: ProviderDriverKind.make("kiro"),
+      createdAt: oldTurnAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-kiro-old"),
+      itemId: asItemId("assistant:kiro-session:segment:1"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-kiro-old-turn-completed"),
+      provider: ProviderDriverKind.make("kiro"),
+      createdAt: oldTurnAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-kiro-old"),
+      payload: {
+        state: "completed",
+      },
+    });
+
+    await waitForThread(harness.readModel, (thread) =>
+      thread.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:assistant:kiro-session:segment:1" &&
+          message.text === "old answer" &&
+          !message.streaming,
+      ),
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-kiro-resume-replay-delta"),
+      provider: ProviderDriverKind.make("kiro"),
+      createdAt: resumeAt,
+      threadId: asThreadId("thread-1"),
+      itemId: asItemId("assistant:kiro-session:segment:0"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "stale replay",
+      },
+    });
+    await harness.drain();
+    const afterReplay = await harness.readModel();
+    const replayThread = afterReplay.threads.find((thread) => thread.id === "thread-1");
+    expect(
+      replayThread?.messages.some((message: ProviderRuntimeTestMessage) =>
+        message.text.includes("stale replay"),
+      ),
+    ).toBe(false);
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-kiro-new-turn-started"),
+      provider: ProviderDriverKind.make("kiro"),
+      createdAt: newTurnAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-kiro-new"),
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.session?.status === "running" && thread.session?.activeTurnId === "turn-kiro-new",
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-kiro-stale-completion-after-new-turn"),
+      provider: ProviderDriverKind.make("kiro"),
+      createdAt: newTurnAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-kiro-new"),
+      itemId: asItemId("assistant:kiro-session:segment:0"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+      },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-kiro-new-delta"),
+      provider: ProviderDriverKind.make("kiro"),
+      createdAt: newTurnAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-kiro-new"),
+      itemId: asItemId("assistant:kiro-session:segment:1"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "fresh answer",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-kiro-new-completed"),
+      provider: ProviderDriverKind.make("kiro"),
+      createdAt: newTurnAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-kiro-new"),
+      itemId: asItemId("assistant:kiro-session:segment:1"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:turn:turn-kiro-new:assistant:kiro-session:segment:1" &&
+          message.text === "fresh answer" &&
+          !message.streaming,
+      ),
+    );
+    const oldMessage = thread.messages.find(
+      (message: ProviderRuntimeTestMessage) =>
+        message.id === "assistant:assistant:kiro-session:segment:1",
+    );
+    const olderMessage = thread.messages.find(
+      (message: ProviderRuntimeTestMessage) =>
+        message.id === "assistant:assistant:kiro-session:segment:0",
+    );
+    const newMessage = thread.messages.find(
+      (message: ProviderRuntimeTestMessage) =>
+        message.id === "assistant:turn:turn-kiro-new:assistant:kiro-session:segment:1",
+    );
+    const staleCompletionMessage = thread.messages.find(
+      (message: ProviderRuntimeTestMessage) =>
+        message.id === "assistant:turn:turn-kiro-new:assistant:kiro-session:segment:0",
+    );
+
+    expect(olderMessage?.turnId).toBe("turn-kiro-old");
+    expect(olderMessage?.text).toBe("older answer");
+    expect(oldMessage?.turnId).toBe("turn-kiro-old");
+    expect(oldMessage?.text).toBe("old answer");
+    expect(newMessage?.turnId).toBe("turn-kiro-new");
+    expect(newMessage?.text).toBe("fresh answer");
+    expect(staleCompletionMessage).toBeUndefined();
+    expect(
+      thread.messages.some((message: ProviderRuntimeTestMessage) =>
+        message.text.includes("stale replay"),
+      ),
+    ).toBe(false);
   });
 
   it("preserves completed tool metadata on projected tool activities", async () => {
@@ -2631,6 +2839,41 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("projects percentage-only context window updates into normalized thread activities", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "thread.token-usage.updated",
+      eventId: asEventId("evt-thread-token-usage-updated-percent"),
+      provider: ProviderDriverKind.make("kiro"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        usage: {
+          usedTokens: 0,
+          usedPercentage: 5,
+          compactsAutomatically: false,
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "context-window.updated",
+      ),
+    );
+
+    const usageActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.kind === "context-window.updated",
+    );
+    expect(usageActivity?.payload).toMatchObject({
+      usedTokens: 0,
+      usedPercentage: 5,
+      compactsAutomatically: false,
+    });
+  });
+
   it("projects Codex camelCase token usage payloads into normalized thread activities", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
@@ -2756,6 +2999,10 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(activity?.summary).toBe("Context compacted");
     expect(activity?.tone).toBe("info");
+    expect(activity?.payload).toMatchObject({
+      state: "compacted",
+      detail: { source: "provider" },
+    });
   });
 
   it("projects Codex task lifecycle chunks into thread activities", async () => {

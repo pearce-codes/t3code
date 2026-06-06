@@ -2,15 +2,17 @@ import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Random from "effect/Random";
 import * as Ref from "effect/Ref";
 
+import { DEFAULT_LOCAL_SERVER_PORT } from "@t3tools/shared/serverPort";
 import * as NetService from "@t3tools/shared/Net";
+import * as Crypto from "effect/Crypto";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import { installDesktopIpcHandlers } from "../ipc/DesktopIpcHandlers.ts";
 import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
+import * as DesktopCloudAuth from "./DesktopCloudAuth.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopBackendManager from "../backend/DesktopBackendManager.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
@@ -22,11 +24,12 @@ import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 
-const DEFAULT_DESKTOP_BACKEND_PORT = 3773;
+const DEFAULT_DESKTOP_BACKEND_PORT = DEFAULT_LOCAL_SERVER_PORT;
 const MAX_TCP_PORT = 65_535;
 const DESKTOP_BACKEND_PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::"] as const;
 
-const makeDesktopRunId = Random.nextUUIDv4.pipe(
+const makeDesktopRunId = Crypto.Crypto.pipe(
+  Effect.flatMap((crypto) => crypto.randomUUIDv4),
   Effect.map((value) => value.replaceAll("-", "").slice(0, 12)),
 );
 
@@ -189,6 +192,7 @@ const startup = Effect.gen(function* () {
   const electronApp = yield* ElectronApp.ElectronApp;
   const electronProtocol = yield* ElectronProtocol.ElectronProtocol;
   const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
+  const cloudAuth = yield* DesktopCloudAuth.DesktopCloudAuth;
   const shellEnvironment = yield* DesktopShellEnvironment.DesktopShellEnvironment;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
   const updates = yield* DesktopUpdates.DesktopUpdates;
@@ -206,6 +210,7 @@ const startup = Effect.gen(function* () {
 
   yield* appIdentity.configure;
   yield* lifecycle.register;
+  yield* cloudAuth.configure;
 
   yield* electronApp.whenReady.pipe(
     Effect.withSpan("desktop.electron.whenReady"),

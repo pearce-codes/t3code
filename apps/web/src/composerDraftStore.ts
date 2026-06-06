@@ -451,11 +451,13 @@ function cloneModelSelection(selection: ModelSelection): DeepMutable<ModelSelect
 function compactModelSelectionByProvider(
   selections: Partial<Record<ProviderInstanceId, ModelSelection>>,
 ): DeepMutable<Record<ProviderInstanceId, ModelSelection>> {
-  return Object.fromEntries(
-    Object.entries(selections)
-      .filter((entry): entry is [string, ModelSelection] => entry[1] !== undefined)
-      .map(([provider, selection]) => [provider, cloneModelSelection(selection)]),
-  ) as DeepMutable<Record<ProviderInstanceId, ModelSelection>>;
+  const entries: Array<[string, DeepMutable<ModelSelection>]> = [];
+  for (const [provider, selection] of Object.entries(selections)) {
+    if (selection !== undefined) {
+      entries.push([provider, cloneModelSelection(selection)]);
+    }
+  }
+  return Object.fromEntries(entries) as DeepMutable<Record<ProviderInstanceId, ModelSelection>>;
 }
 
 const EMPTY_PERSISTED_DRAFT_STORE_STATE = Object.freeze<PersistedComposerDraftStoreState>({
@@ -886,20 +888,30 @@ export function deriveEffectiveComposerModelState(input: {
   const activeSelectionInstanceId = instanceSelection
     ? (input.selectedInstanceId ?? ProviderInstanceId.make(input.selectedProvider))
     : ProviderInstanceId.make(input.selectedProvider);
-  const selectedModel = activeSelection?.model
-    ? (resolveAppModelSelectionForInstance(
-        activeSelectionInstanceId,
-        input.settings,
-        input.providers,
-        activeSelection.model,
-      ) ??
-      resolveAppModelSelection(
-        input.selectedProvider,
-        input.settings,
-        input.providers,
-        activeSelection.model,
-      ))
-    : baseModel;
+  const normalizedActiveModel = activeSelection?.model
+    ? (normalizeModelSlug(activeSelection.model, input.selectedProvider) ?? activeSelection.model)
+    : null;
+  const resolvedActiveModel =
+    activeSelection?.model && normalizedActiveModel
+      ? (resolveAppModelSelectionForInstance(
+          activeSelectionInstanceId,
+          input.settings,
+          input.providers,
+          activeSelection.model,
+        ) ??
+        resolveAppModelSelection(
+          input.selectedProvider,
+          input.settings,
+          input.providers,
+          activeSelection.model,
+        ))
+      : null;
+  const selectedModel =
+    activeSelection?.model && normalizedActiveModel
+      ? resolvedActiveModel === normalizedActiveModel
+        ? resolvedActiveModel
+        : normalizedActiveModel
+      : baseModel;
   const modelOptions =
     modelSelectionByProviderToOptions(input.draft?.modelSelectionByProvider) ??
     providerSelectionsFromModelSelection(input.threadModelSelection) ??
@@ -1809,9 +1821,12 @@ function verifyPersistedAttachments(
     const persistedAttachments = attachments.filter(
       (attachment) => imageIdSet.has(attachment.id) && persistedIdSet.has(attachment.id),
     );
-    const nonPersistedImageIds = current.images
-      .map((image) => image.id)
-      .filter((imageId) => !persistedIdSet.has(imageId));
+    const nonPersistedImageIds: string[] = [];
+    for (const image of current.images) {
+      if (!persistedIdSet.has(image.id)) {
+        nonPersistedImageIds.push(image.id);
+      }
+    }
     const nextDraft: ComposerThreadDraftState = {
       ...current,
       persistedAttachments,

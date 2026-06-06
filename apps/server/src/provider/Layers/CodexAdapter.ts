@@ -25,6 +25,7 @@ import {
   ProviderSendTurnInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Crypto from "effect/Crypto";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -1349,6 +1350,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("codex");
   const fileSystem = yield* FileSystem.FileSystem;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const crypto = yield* Crypto.Crypto;
   const serverConfig = yield* Effect.service(ServerConfig);
   const nativeEventLogger =
     options?.nativeEventLogger ??
@@ -1406,6 +1408,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         const runtime = yield* createRuntime(runtimeInput).pipe(
           Effect.provideService(Scope.Scope, sessionScope),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+          Effect.provideService(Crypto.Crypto, crypto),
           Effect.mapError(
             (cause) =>
               new ProviderAdapterProcessError({
@@ -1553,6 +1556,16 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       ),
     );
 
+  const compactConversation: CodexAdapterShape["compactConversation"] = (input) =>
+    requireSession(input.threadId).pipe(
+      Effect.flatMap((session) => session.runtime.compactConversation),
+      Effect.mapError((cause) =>
+        cause._tag === "ProviderAdapterSessionNotFoundError"
+          ? cause
+          : mapCodexRuntimeError(input.threadId, "thread/compact/start", cause),
+      ),
+    );
+
   const readThread: CodexAdapterShape["readThread"] = (threadId) =>
     requireSession(threadId).pipe(
       Effect.flatMap((session) => session.runtime.readThread),
@@ -1677,6 +1690,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     startSession,
     sendTurn,
     interruptTurn,
+    compactConversation,
     readThread,
     rollbackThread,
     respondToRequest,

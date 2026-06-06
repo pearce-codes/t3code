@@ -50,7 +50,7 @@ const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 // Test-local service tag so the rest of the file can keep using `yield* CodexAdapter`.
 class CodexAdapter extends Context.Service<CodexAdapter, CodexAdapterShape>()(
-  "test/CodexAdapter",
+  "t3/provider/Layers/CodexAdapter.test/CodexAdapter",
 ) {}
 
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
@@ -86,6 +86,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   public readonly interruptTurnImpl = vi.fn(
     (_turnId?: TurnId): Promise<void> => Promise.resolve(undefined),
   );
+
+  public readonly compactConversationImpl = vi.fn((): Promise<void> => Promise.resolve(undefined));
 
   public readonly readThreadImpl = vi.fn(
     (): Promise<CodexThreadSnapshot> =>
@@ -134,6 +136,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   interruptTurn(turnId?: TurnId) {
     return Effect.promise(() => this.interruptTurnImpl(turnId));
   }
+
+  compactConversation = Effect.promise(() => this.compactConversationImpl());
 
   readThread = Effect.promise(() => this.readThreadImpl());
 

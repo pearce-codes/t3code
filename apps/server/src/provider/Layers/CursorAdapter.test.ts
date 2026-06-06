@@ -32,12 +32,13 @@ const decodeCursorSettings = Schema.decodeSync(CursorSettings);
 
 // Test-local service tag so the rest of the file can keep using `yield* CursorAdapter`.
 class CursorAdapter extends Context.Service<CursorAdapter, CursorAdapterShape>()(
-  "test/CursorAdapter",
+  "t3/provider/Layers/CursorAdapter.test/CursorAdapter",
 ) {}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mockAgentPath = path.join(__dirname, "../../../scripts/acp-mock-agent.ts");
-const bunExe = "bun";
+const mockAgentCommand = "node";
+const mockAgentArgs = [mockAgentPath] as const;
 
 async function makeMockAgentWrapper(
   extraEnv?: Record<string, string>,
@@ -51,7 +52,7 @@ async function makeMockAgentWrapper(
   const script = `#!/bin/sh
 ${envExports}
 ${options?.initialDelaySeconds ? `sleep ${JSON.stringify(String(options.initialDelaySeconds))}` : ""}
-exec ${JSON.stringify(bunExe)} ${JSON.stringify(mockAgentPath)} "$@"
+exec ${JSON.stringify(mockAgentCommand)} ${mockAgentArgs.map((arg) => JSON.stringify(arg)).join(" ")} "$@"
 `;
   await writeFile(wrapperPath, script, "utf8");
   await chmod(wrapperPath, 0o755);
@@ -73,7 +74,7 @@ printf '%s\t' "$@" >> ${JSON.stringify(argvLogPath)}
 printf '\n' >> ${JSON.stringify(argvLogPath)}
 export T3_ACP_REQUEST_LOG_PATH=${JSON.stringify(requestLogPath)}
 ${envExports}
-exec ${JSON.stringify(bunExe)} ${JSON.stringify(mockAgentPath)} "$@"
+exec ${JSON.stringify(mockAgentCommand)} ${mockAgentArgs.map((arg) => JSON.stringify(arg)).join(" ")} "$@"
 `;
   await writeFile(wrapperPath, script, "utf8");
   await chmod(wrapperPath, 0o755);
@@ -426,13 +427,15 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
             ? [String((entry.params as Record<string, unknown>).configId)]
             : [],
         );
-        assert.deepStrictEqual(configIdsAfterStart, [
-          "model",
-          "reasoning",
-          "context",
-          "fast",
-          "mode",
-        ]);
+        assert.deepStrictEqual(configIdsAfterStart, ["model", "reasoning", "context", "fast"]);
+        const modeRequestsAfterStart = requestsAfterStart.filter(
+          (entry) => entry.method === "session/set_mode",
+        );
+        assert.lengthOf(modeRequestsAfterStart, 1);
+        assert.equal(
+          (modeRequestsAfterStart[0]?.params as Record<string, unknown> | undefined)?.modeId,
+          "code",
+        );
 
         yield* adapter.sendTurn({
           threadId,
@@ -450,7 +453,7 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
             ? [String((entry.params as Record<string, unknown>).configId)]
             : [],
         );
-        assert.deepStrictEqual(finalConfigIds, ["model", "reasoning", "context", "fast", "mode"]);
+        assert.deepStrictEqual(finalConfigIds, ["model", "reasoning", "context", "fast"]);
         assert.equal(finalRequests.filter((entry) => entry.method === "session/prompt").length, 1);
       }),
   );

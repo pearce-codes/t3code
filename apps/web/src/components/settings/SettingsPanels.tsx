@@ -14,8 +14,10 @@ import {
 import { scopeThreadRef } from "@t3tools/client-runtime";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { createModelSelection } from "@t3tools/shared/model";
+import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
+import * as Result from "effect/Result";
 import { APP_VERSION, HOSTED_APP_CHANNEL, HOSTED_APP_CHANNEL_LABEL } from "../../branding";
 import {
   canCheckForUpdate,
@@ -98,6 +100,13 @@ const TIMESTAMP_FORMAT_LABELS = {
   "12-hour": "12-hour",
   "24-hour": "24-hour",
 } as const;
+
+const ARCHIVE_VIEW_LABELS = {
+  project: "Project",
+  date: "Date",
+} as const;
+
+type ArchiveViewMode = keyof typeof ARCHIVE_VIEW_LABELS;
 
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
 
@@ -1143,7 +1152,12 @@ export function ProviderSettingsPanel() {
     nextFavoriteModels: ReadonlyArray<string>,
   ) => {
     const favoriteModels = [
-      ...new Set(nextFavoriteModels.map((slug) => slug.trim()).filter((slug) => slug.length > 0)),
+      ...new Set(
+        Arr.filterMap(nextFavoriteModels, (slug) => {
+          const trimmedSlug = slug.trim();
+          return trimmedSlug.length > 0 ? Result.succeed(trimmedSlug) : Result.failVoid;
+        }),
+      ),
     ];
     updateSettings({
       favorites: [
@@ -1249,9 +1263,9 @@ export function ProviderSettingsPanel() {
             hiddenModels: [],
             modelOrder: [],
           };
-          const favoriteModels = (settings.favorites ?? [])
-            .filter((favorite) => favorite.provider === row.instanceId)
-            .map((favorite) => favorite.model);
+          const favoriteModels = Arr.filterMap(settings.favorites ?? [], (favorite) =>
+            favorite.provider === row.instanceId ? Result.succeed(favorite.model) : Result.failVoid,
+          );
           const resetLabel = driverOption?.label ?? String(row.driver);
           const headerAction =
             row.isDefault && row.isDirty ? (
@@ -1334,6 +1348,7 @@ export function ProviderSettingsPanel() {
 export function ArchivedThreadsPanel() {
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
+  const [archiveViewMode, setArchiveViewMode] = useState<ArchiveViewMode>("project");
   const environmentIds = useMemo(
     () => [...new Set(projects.map((project) => project.environmentId))],
     [projects],
@@ -1345,7 +1360,7 @@ export function ArchivedThreadsPanel() {
     refresh: refreshArchivedThreads,
   } = useArchivedThreadSnapshots(environmentIds);
 
-  const archivedGroups = useMemo(() => {
+  const archivedIndex = useMemo(() => {
     const projectsByEnvironmentAndId = new Map(
       archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
         snapshot.projects.map(
@@ -1369,22 +1384,50 @@ export function ArchivedThreadsPanel() {
       })),
     );
 
-    return [...projectsByEnvironmentAndId.values()]
-      .map((project) => ({
-        project,
-        threads: threads
-          .filter(
-            (thread) =>
-              thread.projectId === project.id && thread.environmentId === project.environmentId,
-          )
-          .toSorted((left, right) => {
+    return { projectsByEnvironmentAndId, threads };
+  }, [archivedSnapshots]);
+
+  const archivedGroups = useMemo(() => {
+    const { projectsByEnvironmentAndId, threads } = archivedIndex;
+    const archivedProjects = Array.from(projectsByEnvironmentAndId.values());
+    const groups: Array<{
+      readonly project: (typeof archivedProjects)[number];
+      readonly threads: Array<(typeof threads)[number]>;
+    }> = [];
+    for (const project of archivedProjects) {
+      const projectThreads: Array<(typeof threads)[number]> = [];
+      for (const thread of threads) {
+        if (thread.projectId === project.id && thread.environmentId === project.environmentId) {
+          projectThreads.push(thread);
+        }
+      }
+      if (projectThreads.length > 0) {
+        groups.push({
+          project,
+          threads: projectThreads.toSorted((left, right) => {
             const leftKey = left.archivedAt ?? left.createdAt;
             const rightKey = right.archivedAt ?? right.createdAt;
             return rightKey.localeCompare(leftKey) || right.id.localeCompare(left.id);
           }),
+        });
+      }
+    }
+    return groups;
+  }, [archivedIndex]);
+
+  const archivedThreadsByDate = useMemo(() => {
+    const { projectsByEnvironmentAndId, threads } = archivedIndex;
+    return threads
+      .map((thread) => ({
+        thread,
+        project: projectsByEnvironmentAndId.get(`${thread.environmentId}:${thread.projectId}`),
       }))
-      .filter((group) => group.threads.length > 0);
-  }, [archivedSnapshots]);
+      .toSorted(({ thread: left }, { thread: right }) => {
+        const leftKey = left.archivedAt ?? left.createdAt;
+        const rightKey = right.archivedAt ?? right.createdAt;
+        return rightKey.localeCompare(leftKey) || right.id.localeCompare(left.id);
+      });
+  }, [archivedIndex]);
 
   const handleArchivedThreadContextMenu = useCallback(
     async (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
@@ -1422,9 +1465,86 @@ export function ArchivedThreadsPanel() {
     [confirmAndDeleteThread, refreshArchivedThreads, unarchiveThread],
   );
 
+  type ArchivedThread = (typeof archivedIndex.threads)[number];
+  const renderArchivedThreadRow = (
+    thread: ArchivedThread,
+    options?: { readonly projectName?: string | undefined },
+  ) => (
+    <SettingsRow
+      key={`${thread.environmentId}:${thread.id}`}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        void handleArchivedThreadContextMenu(scopeThreadRef(thread.environmentId, thread.id), {
+          x: event.clientX,
+          y: event.clientY,
+        });
+      }}
+      title={thread.title}
+      description={
+        <>
+          {options?.projectName ? `${options.projectName} \u00b7 ` : null}
+          Archived {formatRelativeTimeLabel(thread.archivedAt ?? thread.createdAt)}
+          {" \u00b7 Created "}
+          {formatRelativeTimeLabel(thread.createdAt)}
+        </>
+      }
+      control={
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-7 shrink-0 cursor-pointer gap-1.5 px-2.5"
+          onClick={() =>
+            void unarchiveThread(scopeThreadRef(thread.environmentId, thread.id))
+              .then(() => refreshArchivedThreads())
+              .catch((error) => {
+                toastManager.add(
+                  stackedThreadToast({
+                    type: "error",
+                    title: "Failed to unarchive thread",
+                    description: error instanceof Error ? error.message : "An error occurred.",
+                  }),
+                );
+              })
+          }
+        >
+          <ArchiveX className="size-3.5" />
+          <span>Unarchive</span>
+        </Button>
+      }
+    />
+  );
+
+  const archiveViewControl =
+    archivedThreadsByDate.length > 0 ? (
+      <Select
+        value={archiveViewMode}
+        onValueChange={(value) => {
+          if (value === "project" || value === "date") {
+            setArchiveViewMode(value);
+          }
+        }}
+      >
+        <SelectTrigger size="xs" className="w-28" aria-label="Archive view">
+          <SelectValue>{ARCHIVE_VIEW_LABELS[archiveViewMode]}</SelectValue>
+        </SelectTrigger>
+        <SelectPopup align="end" alignItemWithTrigger={false}>
+          <SelectItem hideIndicator value="project">
+            {ARCHIVE_VIEW_LABELS.project}
+          </SelectItem>
+          <SelectItem hideIndicator value="date">
+            {ARCHIVE_VIEW_LABELS.date}
+          </SelectItem>
+        </SelectPopup>
+      </Select>
+    ) : null;
+
   return (
     <SettingsPageContainer>
-      {archivedGroups.length === 0 ? (
+      {archiveViewControl ? (
+        <div className="flex items-center justify-end px-1">{archiveViewControl}</div>
+      ) : null}
+      {archivedThreadsByDate.length === 0 ? (
         <SettingsSection title="Archived threads">
           <SettingsRow
             title={
@@ -1448,61 +1568,20 @@ export function ArchivedThreadsPanel() {
             }
           />
         </SettingsSection>
+      ) : archiveViewMode === "date" ? (
+        <SettingsSection title="Archived threads">
+          {archivedThreadsByDate.map(({ thread, project }) =>
+            renderArchivedThreadRow(thread, { projectName: project?.name }),
+          )}
+        </SettingsSection>
       ) : (
         archivedGroups.map(({ project, threads: projectThreads }) => (
           <SettingsSection
-            key={project.id}
+            key={`${project.environmentId}:${project.id}`}
             title={project.name}
             icon={<ProjectFavicon environmentId={project.environmentId} cwd={project.cwd} />}
           >
-            {projectThreads.map((thread) => (
-              <SettingsRow
-                key={thread.id}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  void handleArchivedThreadContextMenu(
-                    scopeThreadRef(thread.environmentId, thread.id),
-                    {
-                      x: event.clientX,
-                      y: event.clientY,
-                    },
-                  );
-                }}
-                title={thread.title}
-                description={
-                  <>
-                    Archived {formatRelativeTimeLabel(thread.archivedAt ?? thread.createdAt)}
-                    {" \u00b7 Created "}
-                    {formatRelativeTimeLabel(thread.createdAt)}
-                  </>
-                }
-                control={
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-7 shrink-0 cursor-pointer gap-1.5 px-2.5"
-                    onClick={() =>
-                      void unarchiveThread(scopeThreadRef(thread.environmentId, thread.id))
-                        .then(() => refreshArchivedThreads())
-                        .catch((error) => {
-                          toastManager.add(
-                            stackedThreadToast({
-                              type: "error",
-                              title: "Failed to unarchive thread",
-                              description:
-                                error instanceof Error ? error.message : "An error occurred.",
-                            }),
-                          );
-                        })
-                    }
-                  >
-                    <ArchiveX className="size-3.5" />
-                    <span>Unarchive</span>
-                  </Button>
-                }
-              />
-            ))}
+            {projectThreads.map((thread) => renderArchivedThreadRow(thread))}
           </SettingsSection>
         ))
       )}

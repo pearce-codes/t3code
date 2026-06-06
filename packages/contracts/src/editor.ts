@@ -4,6 +4,16 @@ import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 export const EditorLaunchStyle = Schema.Literals(["direct-path", "goto", "line-column"]);
 export type EditorLaunchStyle = typeof EditorLaunchStyle.Type;
 
+export const EditorLaunchContext = Schema.Struct({
+  remote: Schema.optionalKey(
+    Schema.Struct({
+      type: Schema.Literal("ssh"),
+      authority: TrimmedNonEmptyString,
+    }),
+  ),
+});
+export type EditorLaunchContext = typeof EditorLaunchContext.Type;
+
 type EditorDefinition = {
   readonly id: string;
   readonly label: string;
@@ -44,9 +54,14 @@ export const EDITORS = [
 export const EditorId = Schema.Literals(EDITORS.map((e) => e.id));
 export type EditorId = typeof EditorId.Type;
 
+export const REMOTE_SSH_EDITOR_IDS = ["vscode", "vscode-insiders"] as const;
+export const RemoteSshEditorId = Schema.Literals(REMOTE_SSH_EDITOR_IDS);
+export type RemoteSshEditorId = typeof RemoteSshEditorId.Type;
+
 export const LaunchEditorInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   editor: EditorId,
+  context: Schema.optionalKey(EditorLaunchContext),
 });
 export type LaunchEditorInput = typeof LaunchEditorInput.Type;
 
@@ -54,6 +69,6 @@ export class ExternalLauncherError extends Schema.TaggedErrorClass<ExternalLaunc
   "ExternalLauncherError",
   {
     message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}

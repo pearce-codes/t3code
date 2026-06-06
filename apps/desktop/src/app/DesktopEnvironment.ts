@@ -78,7 +78,7 @@ export interface DesktopEnvironmentShape {
 export class DesktopEnvironment extends Context.Service<
   DesktopEnvironment,
   DesktopEnvironmentShape
->()("t3/desktop/Environment") {}
+>()("@t3tools/desktop/app/DesktopEnvironment") {}
 
 const APP_BASE_NAME = "Pearce Codes";
 
@@ -199,9 +199,9 @@ const makeDesktopEnvironment = Effect.fn("desktop.environment.make")(function* (
     otlpExportIntervalMs: config.otlpExportIntervalMs,
     branding,
     displayName,
-    appUserModelId: isDevelopment
-      ? "com.pearcecodes.pearcecodes.dev"
-      : "com.pearcecodes.pearcecodes",
+    appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
+      isDevelopment ? "com.pearcecodes.pearcecodes.dev" : "com.pearcecodes.pearcecodes",
+    ),
     linuxDesktopEntryName: isDevelopment ? "pearce-codes-dev.desktop" : "pearce-codes.desktop",
     linuxWmClass: isDevelopment ? "pearce-codes-dev" : "pearce-codes",
     userDataDirName,

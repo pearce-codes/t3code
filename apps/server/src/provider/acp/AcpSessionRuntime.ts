@@ -46,7 +46,7 @@ export interface AcpSessionRuntimeOptions {
     readonly name: string;
     readonly version: string;
   };
-  readonly authMethodId: string;
+  readonly authMethodId?: string | null;
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly protocolLogging?: {
     readonly logIncoming?: boolean;
@@ -365,6 +365,43 @@ const makeAcpSessionRuntime = (
         ),
       );
 
+    const setSessionMode = (
+      modeId: string,
+    ): Effect.Effect<EffectAcpSchema.SetSessionModeResponse, EffectAcpErrors.AcpError> =>
+      getStartedState.pipe(
+        Effect.flatMap((started) => {
+          const requestPayload = {
+            sessionId: started.sessionId,
+            modeId,
+          } satisfies EffectAcpSchema.SetSessionModeRequest;
+          return runLoggedRequest(
+            "session/set_mode",
+            requestPayload,
+            acp.agent.setSessionMode(requestPayload),
+          );
+        }),
+      );
+
+    const setModeWithConfigOptionFallback = (
+      modeId: string,
+    ): Effect.Effect<EffectAcpSchema.SetSessionModeResponse, EffectAcpErrors.AcpError> =>
+      setSessionMode(modeId).pipe(
+        Effect.catch((error) => {
+          if (!isMethodNotFoundRequestError(error)) {
+            return Effect.fail(error);
+          }
+          return Ref.get(configOptionsRef).pipe(
+            Effect.flatMap((configOptions) =>
+              findSessionConfigOption(configOptions, "mode")
+                ? setConfigOption("mode", modeId).pipe(
+                    Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
+                  )
+                : Effect.fail(error),
+            ),
+          );
+        }),
+      );
+
     const startOnce = Effect.gen(function* () {
       const initializePayload = {
         protocolVersion: 1,
@@ -378,15 +415,20 @@ const makeAcpSessionRuntime = (
         acp.agent.initialize(initializePayload),
       );
 
-      const authenticatePayload = {
-        methodId: options.authMethodId,
-      } satisfies EffectAcpSchema.AuthenticateRequest;
+      if (
+        options.authMethodId &&
+        initializeResult.authMethods?.some((method) => method.id === options.authMethodId)
+      ) {
+        const authenticatePayload = {
+          methodId: options.authMethodId,
+        } satisfies EffectAcpSchema.AuthenticateRequest;
 
-      yield* runLoggedRequest(
-        "authenticate",
-        authenticatePayload,
-        acp.agent.authenticate(authenticatePayload),
-      );
+        yield* runLoggedRequest(
+          "authenticate",
+          authenticatePayload,
+          acp.agent.authenticate(authenticatePayload),
+        );
+      }
 
       let sessionId: string;
       let sessionSetupResult:
@@ -534,9 +576,8 @@ const makeAcpSessionRuntime = (
             if (modeState?.currentModeId === modeId) {
               return Effect.succeed({} satisfies EffectAcpSchema.SetSessionModeResponse);
             }
-            return setConfigOption("mode", modeId).pipe(
+            return setModeWithConfigOptionFallback(modeId).pipe(
               Effect.tap(() => updateCurrentModeId(modeId)),
-              Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
             );
           }),
         ),
@@ -574,6 +615,10 @@ function configOptionCurrentValueMatches(
     return false;
   }
   return currentValue.trim() === String(value).trim();
+}
+
+function isMethodNotFoundRequestError(error: EffectAcpErrors.AcpError): boolean {
+  return error._tag === "AcpRequestError" && error.code === -32601;
 }
 
 const handleSessionUpdate = ({

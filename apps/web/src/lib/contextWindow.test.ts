@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { EventId, type OrchestrationThreadActivity, TurnId } from "@t3tools/contracts";
 
-import { deriveLatestContextWindowSnapshot, formatContextWindowTokens } from "./contextWindow";
+import {
+  createPendingContextWindowSnapshot,
+  deriveLatestContextWindowSnapshot,
+  formatContextWindowTokens,
+} from "./contextWindow";
 
 function makeActivity(id: string, kind: string, payload: unknown): OrchestrationThreadActivity {
   return {
@@ -44,6 +48,23 @@ describe("contextWindow", () => {
     expect(snapshot).toBeNull();
   });
 
+  it("keeps valid zero-usage snapshots", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.updated", {
+        usedTokens: 0,
+        maxTokens: 100_000,
+      }),
+    ]);
+
+    expect(snapshot).toMatchObject({
+      usedTokens: 0,
+      maxTokens: 100_000,
+      remainingTokens: 100_000,
+      usedPercentage: 0,
+      remainingPercentage: 100,
+    });
+  });
+
   it("formats compact token counts", () => {
     expect(formatContextWindowTokens(999)).toBe("999");
     expect(formatContextWindowTokens(1400)).toBe("1.4k");
@@ -63,5 +84,29 @@ describe("contextWindow", () => {
 
     expect(snapshot?.usedTokens).toBe(81_659);
     expect(snapshot?.totalProcessedTokens).toBe(748_126);
+  });
+
+  it("derives percentage-only context window snapshots", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.updated", {
+        usedTokens: 0,
+        usedPercentage: 5,
+        compactsAutomatically: false,
+      }),
+    ]);
+
+    expect(snapshot?.usedTokens).toBe(0);
+    expect(snapshot?.maxTokens).toBeNull();
+    expect(snapshot?.usedPercentage).toBe(5);
+    expect(snapshot?.remainingPercentage).toBe(95);
+  });
+
+  it("creates a pending context snapshot for loading indicators", () => {
+    expect(createPendingContextWindowSnapshot("2026-03-23T00:00:00.000Z")).toMatchObject({
+      usedTokens: 0,
+      maxTokens: null,
+      usedPercentage: null,
+      updatedAt: "2026-03-23T00:00:00.000Z",
+    });
   });
 });

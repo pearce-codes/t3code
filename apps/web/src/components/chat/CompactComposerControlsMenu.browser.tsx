@@ -10,8 +10,8 @@ import {
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
 import "../../index.css";
 
-import { page } from "vitest/browser";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { page } from "vite-plus/test/browser";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { render } from "vitest-browser-react";
 import { createModelCapabilities, createModelSelection } from "@t3tools/shared/model";
 
@@ -152,7 +152,7 @@ async function mountMenu(props?: { modelSelection?: ModelSelection; prompt?: str
           onPromptChange={onPromptChange}
         />
       }
-      onToggleInteractionMode={vi.fn()}
+      onInteractionModeChange={vi.fn()}
       onTogglePlanSidebar={vi.fn()}
       onRuntimeModeChange={vi.fn()}
     />,
@@ -303,7 +303,7 @@ describe("CompactComposerControlsMenu", () => {
         planSidebarOpen={false}
         runtimeMode="approval-required"
         showInteractionModeToggle={false}
-        onToggleInteractionMode={vi.fn()}
+        onInteractionModeChange={vi.fn()}
         onTogglePlanSidebar={vi.fn()}
         onRuntimeModeChange={vi.fn()}
       />,

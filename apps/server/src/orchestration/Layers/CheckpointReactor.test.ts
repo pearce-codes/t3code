@@ -28,7 +28,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { CheckpointStoreLive } from "../../checkpointing/Layers/CheckpointStore.ts";
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
@@ -107,6 +107,7 @@ function createProviderServiceHarness(
     startSession: () => unsupported(),
     sendTurn: () => unsupported(),
     interruptTurn: () => unsupported(),
+    compactConversation: () => unsupported(),
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),

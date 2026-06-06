@@ -14,7 +14,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
 
-export const DEFAULT_PORT = 3773;
+export { DEFAULT_LOCAL_SERVER_PORT as DEFAULT_PORT } from "@t3tools/shared/serverPort";
 
 export const RuntimeMode = Schema.Literals(["web", "desktop"]);
 export type RuntimeMode = typeof RuntimeMode.Type;

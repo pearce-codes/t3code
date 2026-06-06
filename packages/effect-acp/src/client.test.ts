@@ -22,20 +22,28 @@ import { makeInMemoryStdio } from "./_internal/stdio.ts";
 
 const InitializeRequest = jsonRpcRequest("initialize", AcpSchema.InitializeRequest);
 const InitializeResponse = jsonRpcResponse(AcpSchema.InitializeResponse);
+const RequestPermissionRequest = jsonRpcRequest(
+  "session/request_permission",
+  AcpSchema.RequestPermissionRequest,
+);
+const RequestPermissionResponse = jsonRpcResponse(AcpSchema.RequestPermissionResponse);
 const ExtRequest = jsonRpcRequest("x/test", Schema.Struct({ hello: Schema.String }));
 const ExtResponse = jsonRpcResponse(Schema.Struct({ ok: Schema.Boolean }));
+const decodeRequestPermissionResponse = Schema.decodeEffect(
+  Schema.fromJsonString(RequestPermissionResponse),
+);
 const mockPeerPath = Effect.map(Effect.service(Path.Path), (path) =>
   path.join(import.meta.dirname, "../test/fixtures/acp-mock-peer.ts"),
 );
+const mockPeerArgs = (path: string) => [path];
 
 it.layer(NodeServices.layer)("effect-acp client", (it) => {
   const makeHandle = (env?: Record<string, string>) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const path = yield* Path.Path;
-      const command = ChildProcess.make("bun", ["run", yield* mockPeerPath], {
+      const command = ChildProcess.make(process.execPath, mockPeerArgs(yield* mockPeerPath), {
         cwd: path.join(import.meta.dirname, ".."),
-        shell: process.platform === "win32",
         ...(env ? { env: { ...process.env, ...env } } : {}),
       });
       return yield* spawner.spawn(command);
@@ -143,6 +151,55 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
           hello: "world",
         },
       });
+    }),
+  );
+
+  it.effect("responds to typed client requests with string JSON-RPC ids", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const scope = yield* Scope.make();
+      const acp = yield* AcpClient.make(stdio).pipe(Effect.provideService(Scope.Scope, scope));
+
+      yield* acp.handleRequestPermission(() =>
+        Effect.succeed({
+          outcome: {
+            outcome: "selected",
+            optionId: "allow",
+          },
+        }),
+      );
+
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(RequestPermissionRequest, {
+          jsonrpc: "2.0",
+          id: "1f04ec40-8b52-46f6-a5f5-0e179efd45b2",
+          method: "session/request_permission",
+          headers: [],
+          params: {
+            sessionId: "session-1",
+            toolCall: {
+              toolCallId: "tool-1",
+              title: "Running: echo 7",
+            },
+            options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+          },
+        }),
+      );
+
+      const outbound = yield* Queue.take(output);
+      assert.deepEqual(yield* decodeRequestPermissionResponse(outbound), {
+        jsonrpc: "2.0",
+        id: "1f04ec40-8b52-46f6-a5f5-0e179efd45b2",
+        result: {
+          outcome: {
+            outcome: "selected",
+            optionId: "allow",
+          },
+        },
+      });
+
+      yield* Scope.close(scope, Exit.void);
     }),
   );
 

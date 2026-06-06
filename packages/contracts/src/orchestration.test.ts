@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { it } from "@effect/vitest";
+import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -343,6 +342,27 @@ it.effect("decodes thread archive and unarchive commands", () =>
   }),
 );
 
+it.effect("decodes thread branch commands", () =>
+  Effect.gen(function* () {
+    const branch = yield* decodeOrchestrationCommand({
+      type: "thread.branch",
+      commandId: "cmd-branch-1",
+      sourceThreadId: "thread-source",
+      sourceMessageId: "message-source",
+      threadId: "thread-branch",
+      title: "Source (Branched)",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    if (branch.type !== "thread.branch") {
+      assert.fail(`expected thread.branch command, got ${branch.type}`);
+    }
+    assert.strictEqual(branch.sourceThreadId, "thread-source");
+    assert.strictEqual(branch.sourceMessageId, "message-source");
+    assert.strictEqual(branch.threadId, "thread-branch");
+  }),
+);
+
 it.effect("decodes thread archived and unarchived events", () =>
   Effect.gen(function* () {
     const archived = yield* decodeOrchestrationEvent({
@@ -379,7 +399,9 @@ it.effect("decodes thread archived and unarchived events", () =>
       },
     });
 
-    assert.strictEqual(archived.type, "thread.archived");
+    if (archived.type !== "thread.archived") {
+      assert.fail(`Expected thread.archived event, received ${archived.type}.`);
+    }
     assert.strictEqual(archived.payload.archivedAt, "2026-01-01T00:00:00.000Z");
     assert.strictEqual(unarchived.type, "thread.unarchived");
   }),

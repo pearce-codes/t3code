@@ -14,7 +14,9 @@ import {
   ThreadId,
   type ModelSelection,
   type ProviderOptionSelection,
+  type ServerProvider,
 } from "@t3tools/contracts";
+import type { UnifiedSettings } from "@t3tools/contracts/settings";
 import { createModelSelection } from "@t3tools/shared/model";
 
 // The composer draft's `modelSelectionByProvider` and
@@ -24,9 +26,11 @@ const CODEX_INSTANCE = ProviderInstanceId.make("codex");
 const CODEX_SECONDARY_INSTANCE = ProviderInstanceId.make("codex_secondary");
 const CLAUDE_AGENT_INSTANCE = ProviderInstanceId.make("claudeAgent");
 const CURSOR_INSTANCE = ProviderInstanceId.make("cursor");
+const KIRO_INSTANCE = ProviderInstanceId.make("kiro");
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CLAUDE_AGENT_DRIVER = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER = ProviderDriverKind.make("cursor");
+const KIRO_DRIVER = ProviderDriverKind.make("kiro");
 
 type ProviderOptionSelectionBag = ReadonlyArray<ProviderOptionSelection>;
 type ProviderOptionSelectionsByProvider = Partial<Record<string, ProviderOptionSelectionBag>>;
@@ -55,7 +59,7 @@ function selectionsByProvider(
   }
   return result;
 }
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   COMPOSER_DRAFT_STORAGE_KEY,
@@ -64,6 +68,7 @@ import {
   markPromotedDraftThreadByRef,
   markPromotedDraftThreads,
   markPromotedDraftThreadsByRef,
+  deriveEffectiveComposerModelState,
   type ComposerImageAttachment,
   useComposerDraftStore,
   DraftId,
@@ -965,6 +970,51 @@ describe("composerDraftStore modelSelection", () => {
     expect(
       draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider[CODEX_INSTANCE],
     ).toEqual(modelSelection(CODEX_DRIVER, "gpt-5.4"));
+  });
+
+  it("preserves unknown typed model slugs selected from the composer", () => {
+    const typedModel = "private-kiro-model";
+    const provider: ServerProvider = {
+      driver: KIRO_DRIVER,
+      instanceId: KIRO_INSTANCE,
+      displayName: "Kiro",
+      enabled: true,
+      installed: true,
+      version: "2.5.0",
+      status: "ready",
+      auth: { status: "unknown" },
+      checkedAt: "2026-06-01T00:00:00.000Z",
+      slashCommands: [],
+      skills: [],
+      models: [
+        {
+          slug: "auto",
+          name: "Auto",
+          isCustom: false,
+          capabilities: { optionDescriptors: [] },
+        },
+      ],
+    };
+    const state = deriveEffectiveComposerModelState({
+      draft: {
+        activeProvider: KIRO_INSTANCE,
+        modelSelectionByProvider: {
+          [KIRO_INSTANCE]: createModelSelection(KIRO_INSTANCE, typedModel),
+        },
+      },
+      providers: [provider],
+      selectedProvider: KIRO_DRIVER,
+      selectedInstanceId: KIRO_INSTANCE,
+      threadModelSelection: null,
+      projectModelSelection: null,
+      settings: {
+        providers: {
+          kiro: { customModels: [] },
+        },
+      } as unknown as UnifiedSettings,
+    });
+
+    expect(state.selectedModel).toBe(typedModel);
   });
 
   it("replaces only the targeted provider options on the current model selection", () => {

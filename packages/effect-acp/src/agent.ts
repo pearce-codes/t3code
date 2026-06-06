@@ -177,6 +177,11 @@ export interface AcpAgentShape {
       request: AcpSchema.SetSessionConfigOptionRequest,
     ) => Effect.Effect<AcpSchema.SetSessionConfigOptionResponse, AcpError.AcpError>,
   ) => Effect.Effect<void>;
+  readonly handleSetSessionMode: (
+    handler: (
+      request: AcpSchema.SetSessionModeRequest,
+    ) => Effect.Effect<AcpSchema.SetSessionModeResponse, AcpError.AcpError>,
+  ) => Effect.Effect<void>;
   readonly handlePrompt: (
     handler: (
       request: AcpSchema.PromptRequest,
@@ -207,7 +212,9 @@ export interface AcpAgentShape {
   ) => Effect.Effect<void>;
 }
 
-export class AcpAgent extends Context.Service<AcpAgent, AcpAgentShape>()("effect-acp/AcpAgent") {}
+export class AcpAgent extends Context.Service<AcpAgent, AcpAgentShape>()(
+  "effect-acp/agent/AcpAgent",
+) {}
 
 interface AcpCoreAgentRequestHandlers {
   initialize?: (
@@ -243,6 +250,9 @@ interface AcpCoreAgentRequestHandlers {
   setSessionConfigOption?: (
     request: AcpSchema.SetSessionConfigOptionRequest,
   ) => Effect.Effect<AcpSchema.SetSessionConfigOptionResponse, AcpError.AcpError>;
+  setSessionMode?: (
+    request: AcpSchema.SetSessionModeRequest,
+  ) => Effect.Effect<AcpSchema.SetSessionModeResponse, AcpError.AcpError>;
   prompt?: (
     request: AcpSchema.PromptRequest,
   ) => Effect.Effect<AcpSchema.PromptResponse, AcpError.AcpError>;
@@ -349,6 +359,8 @@ export const make = Effect.fn("effect-acp/AcpAgent.make")(function* (
           payload,
           AGENT_METHODS.session_set_config_option,
         ),
+      [AGENT_METHODS.session_set_mode]: (payload) =>
+        runHandler(coreHandlers.setSessionMode, payload, AGENT_METHODS.session_set_mode),
       [AGENT_METHODS.session_prompt]: (payload) =>
         runHandler(coreHandlers.prompt, payload, AGENT_METHODS.session_prompt),
     }),
@@ -469,6 +481,11 @@ export const make = Effect.fn("effect-acp/AcpAgent.make")(function* (
     handleSetSessionConfigOption: (handler) =>
       Effect.suspend(() => {
         coreHandlers.setSessionConfigOption = handler;
+        return Effect.void;
+      }),
+    handleSetSessionMode: (handler) =>
+      Effect.suspend(() => {
+        coreHandlers.setSessionMode = handler;
         return Effect.void;
       }),
     handlePrompt: (handler) =>

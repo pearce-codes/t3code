@@ -211,6 +211,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     startSession,
     sendTurn,
     interruptTurn,
+    compactConversation: () => Effect.void,
     respondToRequest,
     respondToUserInput,
     stopSession,
@@ -346,9 +347,7 @@ it.effect("ProviderServiceLive catches stopAll failures during shutdown", () =>
     const scope = yield* Scope.make();
     const runtimeServices = yield* Layer.build(providerLayer).pipe(Scope.provide(scope));
 
-    yield* Effect.gen(function* () {
-      yield* ProviderService;
-    }).pipe(Effect.provide(runtimeServices));
+    yield* ProviderService.pipe(Effect.provide(runtimeServices));
     const closeExit = yield* Scope.close(scope, Exit.void).pipe(Effect.exit);
 
     assert.equal(Exit.isSuccess(closeExit), true);
@@ -636,9 +635,7 @@ it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", (
       Layer.provide(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
     );
 
-    yield* Effect.gen(function* () {
-      yield* ProviderService;
-    }).pipe(Effect.provide(providerLayer));
+    yield* ProviderService.pipe(Effect.provide(providerLayer));
 
     const persistedProvider = yield* Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;

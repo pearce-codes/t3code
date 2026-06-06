@@ -1,6 +1,9 @@
+import { Minimize2Icon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
+import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { Spinner } from "../ui/spinner";
 
 function formatPercentage(value: number | null): string | null {
   if (value === null || !Number.isFinite(value)) {
@@ -12,7 +15,12 @@ function formatPercentage(value: number | null): string | null {
   return `${Math.round(value)}%`;
 }
 
-export function ContextWindowMeter(props: { usage: ContextWindowSnapshot }) {
+export function ContextWindowMeter(props: {
+  usage: ContextWindowSnapshot;
+  isCompacting?: boolean;
+  canCompact?: boolean;
+  onCompact?: () => void;
+}) {
   const { usage } = props;
   const usedPercentage = formatPercentage(usage.usedPercentage);
   const normalizedPercentage = Math.max(0, Math.min(100, usage.usedPercentage ?? 0));
@@ -31,7 +39,7 @@ export function ContextWindowMeter(props: { usage: ContextWindowSnapshot }) {
             type="button"
             className="group inline-flex items-center justify-center rounded-full transition-opacity hover:opacity-85"
             aria-label={
-              usage.maxTokens !== null && usedPercentage
+              usedPercentage
                 ? `Context window ${usedPercentage} used`
                 : `Context window ${formatContextWindowTokens(usage.usedTokens)} tokens used`
             }
@@ -69,9 +77,13 @@ export function ContextWindowMeter(props: { usage: ContextWindowSnapshot }) {
                   "text-muted-foreground",
                 )}
               >
-                {usage.usedPercentage !== null
-                  ? Math.round(usage.usedPercentage)
-                  : formatContextWindowTokens(usage.usedTokens)}
+                {props.isCompacting ? (
+                  <Spinner className="size-2.5" />
+                ) : usage.usedPercentage !== null ? (
+                  Math.round(usage.usedPercentage)
+                ) : (
+                  formatContextWindowTokens(usage.usedTokens)
+                )}
               </span>
             </span>
           </button>
@@ -82,7 +94,12 @@ export function ContextWindowMeter(props: { usage: ContextWindowSnapshot }) {
           <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
             Context window
           </div>
-          {usage.maxTokens !== null && usedPercentage ? (
+          {usedPercentage && usage.maxTokens === null ? (
+            <div className="whitespace-nowrap text-xs font-medium text-foreground">
+              <span>{usedPercentage}</span>
+              <span> context used</span>
+            </div>
+          ) : usage.maxTokens !== null && usedPercentage ? (
             <div className="whitespace-nowrap text-xs font-medium text-foreground">
               <span>{usedPercentage}</span>
               <span className="mx-1">⋅</span>
@@ -106,6 +123,18 @@ export function ContextWindowMeter(props: { usage: ContextWindowSnapshot }) {
             <div className="text-xs text-muted-foreground">
               Automatically compacts its context when needed.
             </div>
+          ) : null}
+          {props.onCompact ? (
+            <Button
+              className="mt-2 w-full justify-center"
+              size="xs"
+              variant="outline"
+              disabled={!props.canCompact || props.isCompacting}
+              onClick={props.onCompact}
+            >
+              {props.isCompacting ? <Spinner /> : <Minimize2Icon />}
+              Compact context
+            </Button>
           ) : null}
         </div>
       </PopoverPopup>

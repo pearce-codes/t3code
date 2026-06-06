@@ -1,6 +1,6 @@
 import type * as EffectAcpSchema from "effect-acp/schema";
 import { deriveToolActivityPresentation } from "@t3tools/shared/toolActivity";
-import type { ToolLifecycleItemType } from "@t3tools/contracts";
+import type { ThreadTokenUsageSnapshot, ToolLifecycleItemType } from "@t3tools/contracts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -41,6 +41,10 @@ export interface AcpPermissionRequest {
   readonly toolCall?: AcpToolCallState;
 }
 
+export interface AcpUsageUpdate {
+  readonly usage: ThreadTokenUsageSnapshot;
+}
+
 export type AcpParsedSessionEvent =
   | {
       readonly _tag: "ModeChanged";
@@ -68,6 +72,11 @@ export type AcpParsedSessionEvent =
       readonly _tag: "ContentDelta";
       readonly itemId?: string;
       readonly text: string;
+      readonly rawPayload: unknown;
+    }
+  | {
+      readonly _tag: "UsageUpdated";
+      readonly payload: AcpUsageUpdate;
       readonly rawPayload: unknown;
     };
 
@@ -126,19 +135,20 @@ export function parseSessionModeState(
   if (!currentModeId) {
     return undefined;
   }
-  const availableModes = modes.availableModes
-    .map((mode) => {
-      const id = mode.id.trim();
-      const name = mode.name.trim();
-      if (!id || !name) {
-        return undefined;
-      }
-      const description = mode.description?.trim() || undefined;
-      return description !== undefined
+  const availableModes: Array<AcpSessionMode> = [];
+  for (const mode of modes.availableModes) {
+    const id = mode.id.trim();
+    const name = mode.name.trim();
+    if (!id || !name) {
+      continue;
+    }
+    const description = mode.description?.trim() || undefined;
+    availableModes.push(
+      description !== undefined
         ? ({ id, name, description } satisfies AcpSessionMode)
-        : ({ id, name } satisfies AcpSessionMode);
-    })
-    .filter((mode): mode is AcpSessionMode => mode !== undefined);
+        : ({ id, name } satisfies AcpSessionMode),
+    );
+  }
   if (availableModes.length === 0) {
     return undefined;
   }
@@ -186,9 +196,15 @@ function normalizeCommandValue(value: unknown): string | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const parts = value
-    .map((entry) => (typeof entry === "string" && entry.trim().length > 0 ? entry.trim() : null))
-    .filter((entry): entry is string => entry !== null);
+  const parts: Array<string> = [];
+  for (const entry of value) {
+    if (typeof entry === "string") {
+      const part = entry.trim();
+      if (part.length > 0) {
+        parts.push(part);
+      }
+    }
+  }
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
@@ -197,7 +213,12 @@ function extractCommandFromTitle(title: string | undefined): string | undefined 
     return undefined;
   }
   const match = /`([^`]+)`/.exec(title);
-  return match?.[1]?.trim() || undefined;
+  const backtickCommand = match?.[1]?.trim();
+  if (backtickCommand) {
+    return backtickCommand;
+  }
+  const runningCommand = /^running:\s*(.+)$/i.exec(title)?.[1]?.trim();
+  return runningCommand || undefined;
 }
 
 function extractToolCallCommand(rawInput: unknown, title: string | undefined): string | undefined {
@@ -222,23 +243,36 @@ function extractTextContentFromToolCallContent(
   content: ReadonlyArray<EffectAcpSchema.ToolCallContent> | null | undefined,
 ): string | undefined {
   if (!content) return undefined;
-  const chunks = content
-    .map((entry) => {
-      if (entry.type !== "content") {
-        return undefined;
-      }
-      const nestedContent = entry.content;
-      if (nestedContent.type !== "text") {
-        return undefined;
-      }
-      return nestedContent.text.trim().length > 0 ? nestedContent.text.trim() : undefined;
-    })
-    .filter((entry): entry is string => entry !== undefined);
+  const chunks: Array<string> = [];
+  for (const entry of content) {
+    if (entry.type !== "content") {
+      continue;
+    }
+    const nestedContent = entry.content;
+    if (nestedContent.type !== "text") {
+      continue;
+    }
+    const text = nestedContent.text.trim();
+    if (text.length > 0) {
+      chunks.push(text);
+    }
+  }
   return chunks.length > 0 ? chunks.join("\n") : undefined;
 }
 
 function normalizeToolKind(kind: unknown): string | undefined {
   return typeof kind === "string" && kind.trim().length > 0 ? kind.trim() : undefined;
+}
+
+function inferToolKindFromTitle(title: string | null | undefined): string | undefined {
+  const normalizedTitle = title?.trim().toLowerCase();
+  if (!normalizedTitle) {
+    return undefined;
+  }
+  if (normalizedTitle.startsWith("running:")) {
+    return "execute";
+  }
+  return undefined;
 }
 
 function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecycleItemType {
@@ -379,11 +413,13 @@ export function mergeToolCallState(
 export function parsePermissionRequest(
   params: EffectAcpSchema.RequestPermissionRequest,
 ): AcpPermissionRequest {
+  const inferredKind =
+    normalizeToolKind(params.toolCall.kind) ?? inferToolKindFromTitle(params.toolCall.title);
   const toolCall = makeToolCallState(
     {
       toolCallId: params.toolCall.toolCallId,
       title: params.toolCall.title,
-      kind: params.toolCall.kind,
+      kind: inferredKind as EffectAcpSchema.ToolKind | undefined,
       status: params.toolCall.status,
       rawInput: params.toolCall.rawInput,
       rawOutput: params.toolCall.rawOutput,
@@ -392,7 +428,7 @@ export function parsePermissionRequest(
     },
     { fallbackStatus: "pending" },
   );
-  const kind = normalizeToolKind(params.toolCall.kind) ?? "unknown";
+  const kind = inferredKind ?? "unknown";
   const detail =
     toolCall?.command ??
     toolCall?.title ??
@@ -472,6 +508,19 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
           rawPayload: params,
         });
       }
+      break;
+    }
+    case "usage_update": {
+      events.push({
+        _tag: "UsageUpdated",
+        payload: {
+          usage: {
+            usedTokens: upd.used,
+            ...(upd.size > 0 ? { maxTokens: upd.size } : {}),
+          },
+        },
+        rawPayload: params,
+      });
       break;
     }
     default:

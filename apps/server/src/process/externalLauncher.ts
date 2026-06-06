@@ -9,6 +9,7 @@
 import {
   EDITORS,
   ExternalLauncherError,
+  REMOTE_SSH_EDITOR_IDS,
   type EditorId,
   type LaunchEditorInput,
 } from "@t3tools/contracts";
@@ -107,6 +108,18 @@ function resolveEditorArgs(
 ): ReadonlyArray<string> {
   const baseArgs = "baseArgs" in editor ? editor.baseArgs : [];
   return [...baseArgs, ...resolveCommandEditorArgs(editor, target)];
+}
+
+function isRemoteSshCapableEditor(editorId: EditorId): boolean {
+  return (REMOTE_SSH_EDITOR_IDS as ReadonlyArray<EditorId>).includes(editorId);
+}
+
+function resolveRemoteSshEditorArgs(
+  editor: (typeof EDITORS)[number],
+  target: string,
+  authority: string,
+): ReadonlyArray<string> {
+  return ["--remote", `ssh-remote+${authority}`, ...resolveEditorArgs(editor, target)];
 }
 
 function resolveAvailableCommand(
@@ -257,7 +270,7 @@ export interface ExternalLauncherShape {
  * ExternalLauncher - Service tag for browser/editor launch operations.
  */
 export class ExternalLauncher extends Context.Service<ExternalLauncher, ExternalLauncherShape>()(
-  "t3/process/ExternalLauncher",
+  "t3/process/externalLauncher",
 ) {}
 
 // ==============================
@@ -279,14 +292,31 @@ export const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
     return yield* new ExternalLauncherError({ message: `Unknown editor: ${input.editor}` });
   }
 
+  const remote = input.context?.remote;
+  if (remote && !isRemoteSshCapableEditor(editorDef.id)) {
+    return yield* new ExternalLauncherError({
+      message: `${editorDef.label} does not support SSH remote launch.`,
+    });
+  }
+
   if (editorDef.commands) {
+    if (remote) {
+      if (remote.type !== "ssh") {
+        return yield* new ExternalLauncherError({
+          message: `Unsupported editor remote: ${remote.type}`,
+        });
+      }
+    }
+
     const command = Option.getOrElse(
       resolveAvailableCommand(editorDef.commands, { platform, env }),
       () => editorDef.commands[0],
     );
     return {
       command,
-      args: resolveEditorArgs(editorDef, input.cwd),
+      args: remote
+        ? resolveRemoteSshEditorArgs(editorDef, input.cwd, remote.authority)
+        : resolveEditorArgs(editorDef, input.cwd),
     };
   }
 

@@ -1,8 +1,8 @@
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import { EnvironmentId } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
-import { page, userEvent } from "vitest/browser";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { page, userEvent } from "vite-plus/test/browser";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { render } from "vitest-browser-react";
 
 import { ProviderModelPicker } from "./ProviderModelPicker";
@@ -344,6 +344,50 @@ describe("ProviderModelPicker", () => {
         expect(text).not.toContain("Codex");
         expect(text).toContain("Claude");
         expect(text).toContain("Claude Opus 4.6");
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps warning providers with models selectable", async () => {
+    const kiroProvider: ServerProvider = {
+      driver: ProviderDriverKind.make("kiro"),
+      instanceId: ProviderInstanceId.make("kiro"),
+      displayName: "Kiro",
+      enabled: true,
+      installed: true,
+      version: "1.0.0",
+      status: "warning",
+      auth: { status: "unknown" },
+      checkedAt: new Date().toISOString(),
+      slashCommands: [],
+      skills: [],
+      models: [
+        {
+          slug: "auto",
+          name: "Auto",
+          isCustom: false,
+          capabilities: createModelCapabilities({ optionDescriptors: [] }),
+        },
+      ],
+    };
+    const mounted = await mountPicker({
+      activeInstanceId: CLAUDE_INSTANCE_ID,
+      model: "claude-opus-4-6",
+      lockedProvider: null,
+      providers: [...TEST_PROVIDERS, kiroProvider],
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await page.getByRole("button", { name: "Kiro", exact: true }).click();
+
+      await vi.waitFor(() => {
+        const listText = getModelPickerListText();
+        expect(listText).toContain("Auto");
+        expect(listText).not.toContain("Claude Opus 4.6");
       });
     } finally {
       await mounted.cleanup();
@@ -741,7 +785,7 @@ describe("ProviderModelPicker", () => {
     }
   });
 
-  it("hides the provider sidebar while searching", async () => {
+  it("keeps the provider sidebar visible while searching", async () => {
     const mounted = await mountPicker({
       activeInstanceId: CLAUDE_INSTANCE_ID,
       model: "claude-opus-4-6",
@@ -758,7 +802,11 @@ describe("ProviderModelPicker", () => {
       await page.getByPlaceholder("Search models...").fill("cla");
 
       await vi.waitFor(() => {
-        expect(getSidebarProviderOrder()).toEqual([]);
+        expect(getSidebarProviderOrder().slice(0, 3)).toEqual([
+          "favorites",
+          "codex",
+          "claudeAgent",
+        ]);
       });
     } finally {
       await mounted.cleanup();
@@ -793,7 +841,7 @@ describe("ProviderModelPicker", () => {
     }
   });
 
-  it("searches models by provider name", async () => {
+  it("keeps search scoped to the selected provider rail item", async () => {
     const mounted = await mountPicker({
       activeInstanceId: CLAUDE_INSTANCE_ID,
       model: "claude-opus-4-6",
@@ -814,9 +862,13 @@ describe("ProviderModelPicker", () => {
       await searchInput.fill("codex");
 
       await vi.waitFor(() => {
-        const listText = getModelPickerListText();
-        expect(listText).toContain("GPT-5 Codex");
-        expect(listText).not.toContain("Claude Opus 4.6");
+        expect(getModelPickerListText()).not.toContain("GPT-5 Codex");
+      });
+
+      await page.getByRole("button", { name: "Codex", exact: true }).click();
+
+      await vi.waitFor(() => {
+        expect(getModelPickerListText()).toContain("GPT-5 Codex");
       });
     } finally {
       await mounted.cleanup();

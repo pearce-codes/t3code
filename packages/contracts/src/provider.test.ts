@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import {
@@ -150,6 +150,24 @@ describe("ProviderSendTurnInput", () => {
     expect(parsed.modelSelection?.instanceId).toBe("claudeAgent");
     expect(getOptionValue(parsed.modelSelection?.options, "effort")).toBe("ultrathink");
     expect(getOptionValue(parsed.modelSelection?.options, "fastMode")).toBe(true);
+  });
+
+  it("accepts transcript context for provider turn hydration", () => {
+    const parsed = decodeProviderSendTurnInput({
+      threadId: "thread-1",
+      input: "what is my favorite number?",
+      transcriptContext: [
+        { role: "user", text: "my favorite number is 7" },
+        { role: "assistant", text: "Echo 7 received." },
+        { role: "system", text: "Context compacted: favorite number is 7." },
+      ],
+    });
+
+    expect(parsed.transcriptContext).toEqual([
+      { role: "user", text: "my favorite number is 7" },
+      { role: "assistant", text: "Echo 7 received." },
+      { role: "system", text: "Context compacted: favorite number is 7." },
+    ]);
   });
 });
 

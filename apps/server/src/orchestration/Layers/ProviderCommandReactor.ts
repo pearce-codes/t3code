@@ -2,6 +2,7 @@ import {
   type ChatAttachment,
   CommandId,
   EventId,
+  MessageId,
   type ModelSelection,
   type OrchestrationEvent,
   ProviderDriverKind,
@@ -13,8 +14,10 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
+import { omitProviderCompactionProgressText } from "@t3tools/shared/providerCompaction";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
+import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -49,6 +52,7 @@ type ProviderIntentEvent = Extract<
       | "thread.runtime-mode-set"
       | "thread.turn-start-requested"
       | "thread.turn-interrupt-requested"
+      | "thread.context-compact-requested"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested";
@@ -81,13 +85,12 @@ function mapProviderSessionStatusToOrchestrationStatus(
 const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
   event.commandId !== null ? `command:${event.commandId}` : `event:${event.eventId}`;
 
-const serverCommandId = (tag: string): CommandId =>
-  CommandId.make(`server:${tag}:${crypto.randomUUID()}`);
-
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const DEFAULT_THREAD_TITLE = "New thread";
+const PROVIDER_TRANSCRIPT_CONTEXT_MAX_MESSAGES = 40;
+const PROVIDER_TRANSCRIPT_CONTEXT_MAX_CHARS = 30_000;
 
 export function providerErrorLabel(value: string | undefined): string {
   const normalized = value?.trim();
@@ -114,6 +117,73 @@ function canReplaceThreadTitle(currentTitle: string, titleSeed?: string): boolea
   return trimmedTitleSeed !== undefined && trimmedTitleSeed.length > 0
     ? trimmedCurrentTitle === trimmedTitleSeed
     : false;
+}
+
+function buildTranscriptContext(
+  entries: ReadonlyArray<{
+    readonly role: "user" | "assistant" | "system";
+    readonly text: string;
+  }>,
+) {
+  const context: Array<{ role: "user" | "assistant" | "system"; text: string }> = [];
+  let remainingChars = PROVIDER_TRANSCRIPT_CONTEXT_MAX_CHARS;
+
+  for (const entry of entries.toReversed()) {
+    const text = entry.text.trim();
+    if (!text) {
+      continue;
+    }
+    if (remainingChars <= 0 || context.length >= PROVIDER_TRANSCRIPT_CONTEXT_MAX_MESSAGES) {
+      break;
+    }
+    const truncated =
+      text.length > remainingChars ? text.slice(text.length - remainingChars) : text;
+    context.push({
+      role: entry.role,
+      text: truncated,
+    });
+    remainingChars -= truncated.length;
+  }
+
+  return context.toReversed();
+}
+
+function isUserOrAssistantMessage(message: {
+  readonly role: string;
+  readonly text: string;
+}): message is { readonly role: "user" | "assistant"; readonly text: string } {
+  return message.role === "user" || message.role === "assistant";
+}
+
+function stringifyTranscriptDetail(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value.trim() || undefined;
+  }
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function compactionActivityTranscriptText(activity: {
+  readonly summary: string;
+  readonly payload: unknown;
+}): string | undefined {
+  const payload = activity.payload;
+  const detail = omitProviderCompactionProgressText(
+    payload && typeof payload === "object" && !Array.isArray(payload) && "detail" in payload
+      ? stringifyTranscriptDetail((payload as { readonly detail?: unknown }).detail)
+      : undefined,
+  );
+  const summary = activity.summary.trim();
+  if (!summary) {
+    return detail;
+  }
+  return detail ? `${summary}: ${detail}` : summary;
 }
 
 function findProviderAdapterRequestError(
@@ -178,6 +248,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 }
 
 const make = Effect.gen(function* () {
+  const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
@@ -185,6 +256,9 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  const serverCommandId = (tag: string) =>
+    crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
+  const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
   const handledTurnStartKeys = yield* Cache.make<string, true>({
     capacity: HANDLED_TURN_START_KEY_MAX,
     timeToLive: HANDLED_TURN_START_KEY_TTL,
@@ -207,6 +281,7 @@ const make = Effect.gen(function* () {
       | "provider.turn.interrupt.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
+      | "provider.context.compact.failed"
       | "provider.session.stop.failed";
     readonly summary: string;
     readonly detail: string;
@@ -214,24 +289,31 @@ const make = Effect.gen(function* () {
     readonly createdAt: string;
     readonly requestId?: string;
   }) =>
-    orchestrationEngine.dispatch({
-      type: "thread.activity.append",
+    Effect.all({
       commandId: serverCommandId("provider-failure-activity"),
-      threadId: input.threadId,
-      activity: {
-        id: EventId.make(crypto.randomUUID()),
-        tone: "error",
-        kind: input.kind,
-        summary: input.summary,
-        payload: {
-          detail: input.detail,
-          ...(input.requestId ? { requestId: input.requestId } : {}),
-        },
-        turnId: input.turnId,
-        createdAt: input.createdAt,
-      },
-      createdAt: input.createdAt,
-    });
+      eventId: serverEventId(),
+    }).pipe(
+      Effect.flatMap(({ commandId, eventId }) =>
+        orchestrationEngine.dispatch({
+          type: "thread.activity.append",
+          commandId,
+          threadId: input.threadId,
+          activity: {
+            id: eventId,
+            tone: "error",
+            kind: input.kind,
+            summary: input.summary,
+            payload: {
+              detail: input.detail,
+              ...(input.requestId ? { requestId: input.requestId } : {}),
+            },
+            turnId: input.turnId,
+            createdAt: input.createdAt,
+          },
+          createdAt: input.createdAt,
+        }),
+      ),
+    );
 
   const formatFailureDetail = (cause: Cause.Cause<unknown>): string => {
     const failReason = cause.reasons.find(Cause.isFailReason);
@@ -249,13 +331,17 @@ const make = Effect.gen(function* () {
     readonly session: OrchestrationSession;
     readonly createdAt: string;
   }) =>
-    orchestrationEngine.dispatch({
-      type: "thread.session.set",
-      commandId: serverCommandId("provider-session-set"),
-      threadId: input.threadId,
-      session: input.session,
-      createdAt: input.createdAt,
-    });
+    serverCommandId("provider-session-set").pipe(
+      Effect.flatMap((commandId) =>
+        orchestrationEngine.dispatch({
+          type: "thread.session.set",
+          commandId,
+          threadId: input.threadId,
+          session: input.session,
+          createdAt: input.createdAt,
+        }),
+      ),
+    );
 
   const setThreadSessionErrorOnTurnStartFailure = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
@@ -514,6 +600,7 @@ const make = Effect.gen(function* () {
 
   const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
+    readonly messageId: MessageId;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
@@ -563,10 +650,67 @@ const make = Effect.gen(function* () {
             }
           : requestedModelSelection
         : input.modelSelection;
+    const messageIndex = thread.messages.findIndex((entry) => entry.id === input.messageId);
+    const currentMessage = messageIndex >= 0 ? thread.messages[messageIndex] : undefined;
+    const priorMessages =
+      messageIndex > 0 ? thread.messages.slice(0, messageIndex) : ([] as typeof thread.messages);
+    const priorCompactionActivities = thread.activities.filter(
+      (activity) =>
+        activity.kind === "context-compaction" &&
+        (currentMessage === undefined || activity.createdAt < currentMessage.createdAt),
+    );
+    const latestCompactionActivity = priorCompactionActivities
+      .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .at(-1);
+    const compactionBoundaryCreatedAt = latestCompactionActivity?.createdAt;
+    const transcriptMessages =
+      compactionBoundaryCreatedAt === undefined
+        ? priorMessages
+        : priorMessages.filter((message) => message.createdAt > compactionBoundaryCreatedAt);
+    const transcriptEntries = [
+      ...transcriptMessages.flatMap((message, sourceIndex) =>
+        isUserOrAssistantMessage(message)
+          ? [
+              {
+                role: message.role,
+                text: message.text,
+                createdAt: message.createdAt,
+                sourceIndex,
+              } as const,
+            ]
+          : [],
+      ),
+      ...(latestCompactionActivity === undefined
+        ? []
+        : [latestCompactionActivity].flatMap((activity, sourceIndex) => {
+            const text = compactionActivityTranscriptText(activity);
+            return text === undefined
+              ? []
+              : [
+                  {
+                    role: "system" as const,
+                    text,
+                    createdAt: activity.createdAt,
+                    sourceIndex,
+                  },
+                ];
+          })),
+    ].toSorted(
+      (left, right) =>
+        left.createdAt.localeCompare(right.createdAt) || left.sourceIndex - right.sourceIndex,
+    );
+    const shouldSeedTranscriptContext =
+      thread.session === null &&
+      activeSession?.provider === ProviderDriverKind.make("kiro") &&
+      transcriptEntries.length > 0;
+    const transcriptContext = shouldSeedTranscriptContext
+      ? buildTranscriptContext(transcriptEntries)
+      : [];
 
     return {
       threadId: input.threadId,
       ...(normalizedInput ? { input: normalizedInput } : {}),
+      ...(transcriptContext.length > 0 ? { transcriptContext } : {}),
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
@@ -610,7 +754,7 @@ const make = Effect.gen(function* () {
       const renamed = yield* gitWorkflow.renameBranch({ cwd, oldBranch, newBranch: targetBranch });
       yield* orchestrationEngine.dispatch({
         type: "thread.meta.update",
-        commandId: serverCommandId("worktree-branch-rename"),
+        commandId: yield* serverCommandId("worktree-branch-rename"),
         threadId: input.threadId,
         branch: renamed.branch,
         worktreePath: cwd,
@@ -657,7 +801,7 @@ const make = Effect.gen(function* () {
 
         yield* orchestrationEngine.dispatch({
           type: "thread.meta.update",
-          commandId: serverCommandId("thread-title-rename"),
+          commandId: yield* serverCommandId("thread-title-rename"),
           threadId: input.threadId,
           title: generated.title,
         });
@@ -768,6 +912,7 @@ const make = Effect.gen(function* () {
 
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
+      messageId: event.payload.messageId,
       messageText: message.text,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
       ...(event.payload.modelSelection !== undefined
@@ -810,6 +955,39 @@ const make = Effect.gen(function* () {
 
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
     yield* providerService.interruptTurn({ threadId: event.payload.threadId });
+  });
+
+  const processContextCompactRequested = Effect.fn("processContextCompactRequested")(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.context-compact-requested" }>,
+  ) {
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread) {
+      return;
+    }
+    const hasSession = thread.session && thread.session.status !== "stopped";
+    if (!hasSession) {
+      return yield* appendProviderFailureActivity({
+        threadId: event.payload.threadId,
+        kind: "provider.context.compact.failed",
+        summary: "Context compaction failed",
+        detail: "No active provider session is bound to this thread.",
+        turnId: null,
+        createdAt: event.payload.createdAt,
+      });
+    }
+
+    yield* providerService.compactConversation({ threadId: event.payload.threadId }).pipe(
+      Effect.catchCause((cause) =>
+        appendProviderFailureActivity({
+          threadId: event.payload.threadId,
+          kind: "provider.context.compact.failed",
+          summary: "Context compaction failed",
+          detail: Cause.pretty(cause),
+          turnId: null,
+          createdAt: event.payload.createdAt,
+        }),
+      ),
+    );
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (
@@ -962,6 +1140,9 @@ const make = Effect.gen(function* () {
       case "thread.turn-interrupt-requested":
         yield* processTurnInterruptRequested(event);
         return;
+      case "thread.context-compact-requested":
+        yield* processContextCompactRequested(event);
+        return;
       case "thread.approval-response-requested":
         yield* processApprovalResponseRequested(event);
         return;
@@ -995,6 +1176,7 @@ const make = Effect.gen(function* () {
         event.type === "thread.runtime-mode-set" ||
         event.type === "thread.turn-start-requested" ||
         event.type === "thread.turn-interrupt-requested" ||
+        event.type === "thread.context-compact-requested" ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
         event.type === "thread.session-stop-requested"

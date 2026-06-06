@@ -1,5 +1,5 @@
 import { EnvironmentId } from "@t3tools/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import { shouldShowOpenInPicker } from "./ChatHeader";
 
@@ -36,12 +36,34 @@ describe("shouldShowOpenInPicker", () => {
     ).toBe(false);
   });
 
+  it("shows the picker for ssh remote environments", () => {
+    expect(
+      shouldShowOpenInPicker({
+        activeProjectName: "codething-mvp",
+        activeThreadEnvironmentId: EnvironmentId.make("environment-remote"),
+        primaryEnvironmentId,
+        openInLaunchContext: {
+          remote: {
+            type: "ssh",
+            authority: "devbox",
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("hides the picker when there is no active project", () => {
     expect(
       shouldShowOpenInPicker({
         activeProjectName: undefined,
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
+        openInLaunchContext: {
+          remote: {
+            type: "ssh",
+            authority: "devbox",
+          },
+        },
       }),
     ).toBe(false);
   });
