@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { it } from "@effect/vitest";
+import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -48,7 +47,9 @@ it.effect("decodes auth session and websocket ticket datetime strings", () =>
       ticket: "ws-ticket",
       expiresAt: "2026-05-01T12:05:00.000Z",
     });
-    assert.ok(session.expiresAt);
+    if (session.expiresAt === undefined) {
+      assert.fail("expected session expiration");
+    }
 
     assert.equal(DateTime.formatIso(session.expiresAt), "2026-05-01T12:00:00.000Z");
     assert.equal(DateTime.formatIso(ticket.expiresAt), "2026-05-01T12:05:00.000Z");

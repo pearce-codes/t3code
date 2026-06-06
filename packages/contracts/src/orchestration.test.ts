@@ -354,7 +354,9 @@ it.effect("decodes thread branch commands", () =>
       createdAt: "2026-01-01T00:00:00.000Z",
     });
 
-    assert.strictEqual(branch.type, "thread.branch");
+    if (branch.type !== "thread.branch") {
+      assert.fail(`expected thread.branch command, got ${branch.type}`);
+    }
     assert.strictEqual(branch.sourceThreadId, "thread-source");
     assert.strictEqual(branch.sourceMessageId, "message-source");
     assert.strictEqual(branch.threadId, "thread-branch");

@@ -324,8 +324,8 @@ describe("AcpSessionRuntime", () => {
         AcpSessionRuntime.layer({
           authMethodId: "test",
           spawn: {
-            command: bunExe,
-            args: [mockAgentPath],
+            command: mockAgentCommand,
+            args: mockAgentArgs,
           },
           cwd: process.cwd(),
           clientInfo: { name: "t3-test", version: "0.0.0" },

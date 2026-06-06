@@ -186,15 +186,15 @@ describe("decideOrchestrationCommand thread.branch", () => {
   it("creates a branched thread and copies transcript messages and activities", async () => {
     const readModel = await seedReadModel();
     const decided = await runDecision({
-        readModel,
-        command: {
-          type: "thread.branch",
-          commandId: asCommandId("cmd-thread-branch"),
-          sourceThreadId: asThreadId("thread-source"),
-          threadId: asThreadId("thread-branch"),
-          createdAt: "2026-01-01T01:00:00.000Z",
-        },
-      });
+      readModel,
+      command: {
+        type: "thread.branch",
+        commandId: asCommandId("cmd-thread-branch"),
+        sourceThreadId: asThreadId("thread-source"),
+        threadId: asThreadId("thread-branch"),
+        createdAt: "2026-01-01T01:00:00.000Z",
+      },
+    });
 
     const events = Array.isArray(decided) ? decided : [decided];
     expect(events.map((event) => event.type)).toEqual([
@@ -364,16 +364,16 @@ describe("decideOrchestrationCommand thread.branch", () => {
     ]);
 
     const decided = await runDecision({
-        readModel,
-        command: {
-          type: "thread.branch",
-          commandId: asCommandId("cmd-thread-branch-message"),
-          sourceThreadId: asThreadId("thread-source"),
-          sourceMessageId: asMessageId("message-assistant"),
-          threadId: asThreadId("thread-branch-message"),
-          createdAt: "2026-01-01T01:00:00.000Z",
-        },
-      });
+      readModel,
+      command: {
+        type: "thread.branch",
+        commandId: asCommandId("cmd-thread-branch-message"),
+        sourceThreadId: asThreadId("thread-source"),
+        sourceMessageId: asMessageId("message-assistant"),
+        threadId: asThreadId("thread-branch-message"),
+        createdAt: "2026-01-01T01:00:00.000Z",
+      },
+    });
 
     const events = Array.isArray(decided) ? decided : [decided];
     const branchedReadModel = await projectEvents(readModel, events);
@@ -395,16 +395,16 @@ describe("decideOrchestrationCommand thread.branch", () => {
 
     await expect(
       runDecision({
-          readModel,
-          command: {
-            type: "thread.branch",
-            commandId: asCommandId("cmd-thread-branch-streaming"),
-            sourceThreadId: asThreadId("thread-source"),
-            sourceMessageId: asMessageId("message-assistant"),
-            threadId: asThreadId("thread-branch-streaming"),
-            createdAt: "2026-01-01T01:00:00.000Z",
-          },
-        }),
+        readModel,
+        command: {
+          type: "thread.branch",
+          commandId: asCommandId("cmd-thread-branch-streaming"),
+          sourceThreadId: asThreadId("thread-source"),
+          sourceMessageId: asMessageId("message-assistant"),
+          threadId: asThreadId("thread-branch-streaming"),
+          createdAt: "2026-01-01T01:00:00.000Z",
+        },
+      }),
     ).rejects.toThrow("still streaming");
   });
 });
