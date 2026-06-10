@@ -21,7 +21,7 @@ stable-version bump commits. It does not require a custom release GitHub App.
 ### npm
 
 - Package: `@pearcecodes/t3code`
-- Binary: `t3code`
+- Binary: `pearcecodes`
 - Access: public
 - Dist-tags:
   - stable releases publish `latest`
