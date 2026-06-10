@@ -35,6 +35,8 @@ import {
   getLastNonEmptyOutputLine,
   remoteStateKey,
   resolveSshCommand,
+  REMOTE_CLI_BIN_NAME,
+  REMOTE_CLI_PACKAGE_NAME,
   resolveSshTarget,
   runSshCommand,
   targetConnectionKey,
@@ -408,6 +410,68 @@ ensure_remote_node_path() {
 
   command -v node >/dev/null 2>&1 && remote_node_satisfies_engine
 }
+
+t3_python_supports_gyp() {
+  "$1" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)' >/dev/null 2>&1
+}
+
+# node-gyp (used to build native modules such as node-pty) requires Python >= 3.8.
+# Many hosts still default \`python3\` to an older version, so resolve a suitable
+# interpreter and export npm_config_python for the npm/npx install that follows.
+ensure_remote_gyp_python() {
+  if [ -n "\${npm_config_python:-}" ] && t3_python_supports_gyp "$npm_config_python"; then
+    export npm_config_python
+    return 0
+  fi
+  if [ -n "\${PYTHON:-}" ] && t3_python_supports_gyp "$PYTHON"; then
+    export npm_config_python="$PYTHON"
+    return 0
+  fi
+  for t3_py_candidate in python3.13 python3.12 python3.11 python3.10 python3.9 python3.8 python3 python; do
+    t3_py_resolved=$(command -v "$t3_py_candidate" 2>/dev/null) || continue
+    if t3_python_supports_gyp "$t3_py_resolved"; then
+      export npm_config_python="$t3_py_resolved"
+      return 0
+    fi
+  done
+  if command -v mise >/dev/null 2>&1; then
+    t3_py_resolved=$(mise which python3 2>/dev/null) || t3_py_resolved=""
+    if [ -n "$t3_py_resolved" ] && t3_python_supports_gyp "$t3_py_resolved"; then
+      export npm_config_python="$t3_py_resolved"
+      return 0
+    fi
+  fi
+  if command -v pyenv >/dev/null 2>&1; then
+    t3_py_resolved=$(pyenv which python3 2>/dev/null) || t3_py_resolved=""
+    if [ -n "$t3_py_resolved" ] && t3_python_supports_gyp "$t3_py_resolved"; then
+      export npm_config_python="$t3_py_resolved"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# Print an actionable summary of remote prerequisites. Used when the server fails
+# to come up so the failure shows *what* is missing instead of an opaque timeout.
+diagnose_remote_prereqs() {
+  printf '[t3code] Remote prerequisite check:\\n'
+  if command -v node >/dev/null 2>&1; then
+    printf '  node: %s (%s)\\n' "$(command -v node)" "$(node -v 2>&1)"
+    remote_node_satisfies_engine >/dev/null 2>&1 || printf '  node: does NOT satisfy the required engine range; upgrade Node.\\n'
+  else
+    printf '  node: MISSING (required) — install Node or configure a version manager for non-interactive shells.\\n'
+  fi
+  if command -v npm >/dev/null 2>&1; then printf '  npm: %s\\n' "$(npm -v 2>&1)"; else printf '  npm: MISSING\\n'; fi
+  command -v npx >/dev/null 2>&1 || printf '  npx: MISSING\\n'
+  if ensure_remote_gyp_python; then
+    printf '  python (node-gyp): %s (%s)\\n' "$npm_config_python" "$("$npm_config_python" --version 2>&1)"
+  else
+    printf '  python (>=3.8 for node-gyp): MISSING — native modules such as node-pty cannot build. Install Python >= 3.8 (for example: mise use -g python@3.12).\\n'
+  fi
+  for t3_build_tool in make gcc g++; do
+    command -v "$t3_build_tool" >/dev/null 2>&1 || printf '  %s: MISSING (needed to compile native modules)\\n' "$t3_build_tool"
+  done
+}
 `;
 
 export const REMOTE_RUNNER_SCRIPT = `#!/bin/sh
@@ -422,9 +486,10 @@ if [ -n "$T3_NODE_SCRIPT_PATH" ]; then
   fi
   exec node "$T3_NODE_SCRIPT_PATH" "$@"
 fi
-if command -v t3 >/dev/null 2>&1; then
-  exec t3 "$@"
+if command -v @@T3_CLI_BIN@@ >/dev/null 2>&1; then
+  exec @@T3_CLI_BIN@@ "$@"
 fi
+ensure_remote_gyp_python || true
 if command -v npx >/dev/null 2>&1; then
   exec npx --yes @@T3_PACKAGE_SPEC@@ "$@"
 fi
@@ -438,8 +503,8 @@ exit 1
 export const REMOTE_LAUNCH_SCRIPT = `set -eu
 @@T3_NODE_ENV_SCRIPT@@
 STATE_KEY="$1"
-STATE_DIR="$HOME/.t3/ssh-launch/$STATE_KEY"
-DEFAULT_SERVER_HOME="$HOME/.t3"
+STATE_DIR="$HOME/.pearce-codes/ssh-launch/$STATE_KEY"
+DEFAULT_SERVER_HOME="$HOME/.pearce-codes"
 DEFAULT_RUNTIME_FILE="$DEFAULT_SERVER_HOME/userdata/server-runtime.json"
 PORT_FILE="$STATE_DIR/port"
 PID_FILE="$STATE_DIR/pid"
@@ -580,6 +645,7 @@ if [ -z "$REMOTE_PORT" ]; then
   printf 'managed\\n' >"$MANAGED_FILE"
   if ! wait_ready "@@T3_READY_TIMEOUT_MS@@"; then
     printf 'Remote T3 server did not become ready on 127.0.0.1:%s.\\n' "$REMOTE_PORT" >&2
+    diagnose_remote_prereqs >&2 2>/dev/null || true
     tail -n 80 "$LOG_FILE" >&2 2>/dev/null || true
     kill "$REMOTE_PID" 2>/dev/null || true
     wait_for_pid_exit "$REMOTE_PID"
@@ -591,8 +657,8 @@ printf '{"remotePort":%s,"serverKind":"%s"}\\n' "$REMOTE_PORT" "\${REMOTE_MANAGE
 `;
 
 export const REMOTE_PAIRING_SCRIPT = `set -eu
-STATE_DIR="$HOME/.t3/ssh-launch/@@T3_STATE_KEY@@"
-DEFAULT_SERVER_HOME="$HOME/.t3"
+STATE_DIR="$HOME/.pearce-codes/ssh-launch/@@T3_STATE_KEY@@"
+DEFAULT_SERVER_HOME="$HOME/.pearce-codes"
 RUNNER_FILE="$STATE_DIR/run-t3.sh"
 mkdir -p "$STATE_DIR"
 cat >"$RUNNER_FILE" <<'SH'
@@ -604,7 +670,7 @@ PAIRING_BASE_DIR="$DEFAULT_SERVER_HOME"
 `;
 
 export const REMOTE_STOP_SCRIPT = `set -eu
-STATE_DIR="$HOME/.t3/ssh-launch/@@T3_STATE_KEY@@"
+STATE_DIR="$HOME/.pearce-codes/ssh-launch/@@T3_STATE_KEY@@"
 PID_FILE="$STATE_DIR/pid"
 PORT_FILE="$STATE_DIR/port"
 MANAGED_FILE="$STATE_DIR/managed"
@@ -623,7 +689,7 @@ printf '{"stopped":true}\\n'
 `;
 
 const REMOTE_LOG_TAIL_SCRIPT = `set -eu
-STATE_DIR="$HOME/.t3/ssh-launch/@@T3_STATE_KEY@@"
+STATE_DIR="$HOME/.pearce-codes/ssh-launch/@@T3_STATE_KEY@@"
 LOG_FILE="$STATE_DIR/server.log"
 if [ -f "$LOG_FILE" ]; then
   tail -n 80 "$LOG_FILE" 2>/dev/null || true
@@ -631,11 +697,14 @@ fi
 `;
 
 export function buildRemoteT3RunnerScript(input?: RemoteT3RunnerOptions): string {
-  const packageSpec = shellSingleQuote(input?.packageSpec?.trim() || "t3@latest");
+  const packageSpec = shellSingleQuote(
+    input?.packageSpec?.trim() || `${REMOTE_CLI_PACKAGE_NAME}@latest`,
+  );
   const nodeScriptPath = input?.nodeScriptPath?.trim() || "";
   return stripTrailingNewlines(
     applyScriptPlaceholders(REMOTE_RUNNER_SCRIPT, {
       T3_PACKAGE_SPEC: packageSpec,
+      T3_CLI_BIN: REMOTE_CLI_BIN_NAME,
       T3_NODE_SCRIPT_PATH: shellSingleQuote(nodeScriptPath),
       T3_NODE_ENV_SCRIPT: buildRemoteNodeEnvScript(input),
     }),

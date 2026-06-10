@@ -94,10 +94,13 @@ describe("ssh tunnel scripts", () => {
     const script = buildRemoteT3RunnerScript({ nodeEngineRange: TEST_NODE_ENGINE_RANGE });
 
     assert.include(script, "T3_NODE_SCRIPT_PATH=''");
-    assert.include(script, 'exec t3 "$@"');
-    assert.include(script, "exec npx --yes 't3@latest' \"$@\"");
-    assert.include(script, "exec npm exec --yes 't3@latest' -- \"$@\"");
-    assert.include(script, "could not install 't3@latest'");
+    assert.include(script, 'exec pearcecodes "$@"');
+    assert.include(script, "exec npx --yes '@pearcecodes/t3code@latest' \"$@\"");
+    assert.include(script, "exec npm exec --yes '@pearcecodes/t3code@latest' -- \"$@\"");
+    assert.include(script, "could not install '@pearcecodes/t3code@latest'");
+    assert.include(script, "ensure_remote_gyp_python");
+    assert.include(script, "t3_python_supports_gyp");
+    assert.include(script, "mise which python3");
     assert.include(script, 'prepend_path_if_dir "$HOME/.local/bin"');
     assert.include(script, `T3_NODE_ENGINE_RANGE='${TEST_NODE_ENGINE_RANGE}'`);
     assert.include(script, "remote_node_satisfies_engine()");
@@ -174,6 +177,8 @@ describe("ssh tunnel scripts", () => {
     assert.include(buildRemoteLaunchScript(), '--base-dir "$DEFAULT_SERVER_HOME"');
     assert.notInclude(buildRemoteLaunchScript(), "server-home");
     assert.include(buildRemoteLaunchScript(), "Remote T3 server did not become ready");
+    assert.include(buildRemoteLaunchScript(), "diagnose_remote_prereqs");
+    assert.include(buildRemoteLaunchScript(), "python (>=3.8 for node-gyp): MISSING");
     assert.include(buildRemoteLaunchScript({ packageSpec: "t3@nightly" }), "t3@nightly");
     assert.include(
       buildRemotePairingScript(target),
