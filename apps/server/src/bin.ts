@@ -31,7 +31,7 @@ const cloudUnavailableCommand = Command.make("cloud").pipe(
   Command.withHandler(() =>
     Effect.fail(
       new CliError.ShowHelp({
-        commandPath: ["t3code", "cloud"],
+        commandPath: ["pearcecodes", "cloud"],
         errors: [new CloudPublicConfigMissingError({ cause: cloudPublicConfigMissingMessage })],
       }),
     ),
@@ -39,7 +39,7 @@ const cloudUnavailableCommand = Command.make("cloud").pipe(
 );
 
 export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
-  Command.make("t3code", { ...sharedServerCommandFlags }).pipe(
+  Command.make("pearcecodes", { ...sharedServerCommandFlags }).pipe(
     Command.withDescription("Run the Pearce Codes server."),
     Command.withHandler((flags) => runServerCommand(flags)),
     Command.withSubcommands([

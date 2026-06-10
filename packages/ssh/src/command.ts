@@ -14,6 +14,14 @@ import { buildSshChildEnvironment, type SshAuthOptions } from "./auth.ts";
 import { SshCommandError, SshInvalidTargetError } from "./errors.ts";
 
 const PUBLISHABLE_T3_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
+// npm package the desktop app installs/runs on remote SSH hosts.
+// This is the published Pearce Codes fork CLI (scoped so it never collides with
+// upstream `t3` on npm). The internal workspace package stays named `t3`; the
+// publish script (apps/server/scripts/cli.ts) rewrites the name to this at publish time.
+export const REMOTE_CLI_PACKAGE_NAME = "@pearcecodes/t3code";
+// Unique global command exposed by the fork CLI bin. Distinct from upstream's
+// `t3code` so a globally-installed upstream CLI can never be picked up on PATH.
+export const REMOTE_CLI_BIN_NAME = "pearcecodes";
 const DEFAULT_SSH_COMMAND_TIMEOUT_MS = 60_000;
 const MAX_SSH_ERROR_OUTPUT_LENGTH = 4_000;
 export const SSH_COMMAND = process.platform === "win32" ? "ssh.exe" : "ssh";
@@ -356,12 +364,14 @@ export function resolveRemoteT3CliPackageSpec(input: {
 }): string {
   const appVersion = input.appVersion.trim();
   if (!input.isDevelopment && PUBLISHABLE_T3_VERSION_PATTERN.test(appVersion)) {
-    return `t3@${appVersion}`;
+    return `${REMOTE_CLI_PACKAGE_NAME}@${appVersion}`;
   }
 
   if (input.isDevelopment) {
-    return "t3@nightly";
+    return `${REMOTE_CLI_PACKAGE_NAME}@nightly`;
   }
 
-  return input.updateChannel === "nightly" ? "t3@nightly" : "t3@latest";
+  return input.updateChannel === "nightly"
+    ? `${REMOTE_CLI_PACKAGE_NAME}@nightly`
+    : `${REMOTE_CLI_PACKAGE_NAME}@latest`;
 }
