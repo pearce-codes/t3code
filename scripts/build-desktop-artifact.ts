@@ -1584,6 +1584,9 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
     // by the WSL preflight probe at runtime, while ffi-rs, @ff-labs/fff-node
     // and the bun adapters are covered by the shared runtime-external closure
     // and emitted-bundle checks.
+    const probeEnv = { ...process.env };
+    delete probeEnv.ELECTRON_RUN_AS_NODE;
+
     yield* runCommand(
       ChildProcess.make(
         process.execPath,
@@ -1599,7 +1602,7 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
           // NODE_PATH would let a createRequire call inside the bundle resolve
           // a missing external from outside the packaged tree, which is the
           // whole thing this is trying to rule out.
-          env: { ...process.env, NODE_PATH: "" },
+          env: { ...probeEnv, NODE_PATH: "" },
         },
       ),
       {

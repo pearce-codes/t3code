@@ -201,7 +201,7 @@ describe("theme files", () => {
       colors: {
         canvas: canonical("#07152f"),
         accent: canonical("#67c2ff"),
-        placeholder: canonical("#968d9f"),
+        placeholder: canonical("#a58c4d"),
       },
     });
   });
@@ -378,33 +378,33 @@ describe("theme files", () => {
     });
   });
 
-  it("keeps the T3 Chat palette faithful and readable", () => {
+  it("keeps the Pearce CRT palette faithful and readable", () => {
     expectThemeColors(T3_CHAT_THEME.colors, {
-      canvas: "#fdf7fd",
-      chrome: "#fdf7fd",
-      toolbarBorder: "#efbdeb",
-      toolbarControl: "#f3e6f5",
-      toolbarControlHover: "#eccfe3",
-      surfaceRaised: "#fdfafd",
-      input: "#e7c1dc",
-      focus: "#db2777",
-      messageSurface: "#f7def2",
-      codeBackground: "#f5ecf9",
-      codeForeground: "#673c8b",
-      accentSurface: "#f3e6f5",
-      sidebar: "#f2e1f4",
+      canvas: "#fff9e8",
+      chrome: "#fff9e8",
+      toolbarBorder: "#e6cf96",
+      toolbarControl: "#f5e8bf",
+      toolbarControlHover: "#ecd798",
+      surfaceRaised: "#fffdf5",
+      input: "#dec681",
+      focus: "#c78300",
+      messageSurface: "#f4e3ad",
+      codeBackground: "#f7edcf",
+      codeForeground: "#4f3909",
+      accentSurface: "#f5e8bf",
+      sidebar: "#f2e3b7",
     });
     expectThemeColors(T3_CHAT_THEME.variants!.dark!, {
-      canvas: "#1f1a24",
-      chrome: "#1f1a24",
-      surface: "#29232d",
-      surfaceRaised: "#2c2631",
-      input: "#302029",
-      focus: "#db2777",
-      messageSurface: "#2b2431",
-      codeBackground: "#1f1a24",
-      sidebar: "#171018",
-      sidebarBorder: "#322028",
+      canvas: "#151106",
+      chrome: "#151106",
+      surface: "#211b08",
+      surfaceRaised: "#292108",
+      input: "#302507",
+      focus: "#f4b942",
+      messageSurface: "#282006",
+      codeBackground: "#121004",
+      sidebar: "#0e0b02",
+      sidebarBorder: "#302507",
     });
 
     for (const mode of ["light", "dark"] as const) {

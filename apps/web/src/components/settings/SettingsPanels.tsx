@@ -1997,6 +1997,37 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
+          {...searchableSetting("anonymous-telemetry")}
+          description="Allow anonymous product analytics. Turning this off immediately stops delivery and clears queued events."
+          resetAction={
+            settings.observability.telemetryEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.observability.telemetryEnabled ? (
+              <SettingResetButton
+                label="anonymous telemetry"
+                onClick={() =>
+                  updateSettings({
+                    observability: {
+                      telemetryEnabled: DEFAULT_UNIFIED_SETTINGS.observability.telemetryEnabled,
+                    },
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.observability.telemetryEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({
+                  observability: { telemetryEnabled: Boolean(checked) },
+                })
+              }
+              aria-label="Allow anonymous telemetry"
+            />
+          }
+        />
+
+        <SettingsRow
           title={
             <span className="inline-flex items-center gap-1.5">
               Background activity

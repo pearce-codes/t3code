@@ -20,6 +20,7 @@ import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import { getTelemetryIdentifier } from "./Identify.ts";
 
 interface BufferedAnalyticsEvent {
@@ -70,6 +71,18 @@ export const make = Effect.gen(function* () {
   const telemetryConfig = yield* TelemetryEnvConfig;
   const httpClient = yield* HttpClient.HttpClient;
   const serverConfig = yield* ServerConfig.ServerConfig;
+  const serverSettings = yield* ServerSettingsService;
+  const telemetryEnabled = serverSettings.getSettings.pipe(
+    Effect.map((settings) => telemetryConfig.enabled && settings.observability.telemetryEnabled),
+    Effect.orElseSucceed(() => false),
+  );
+  const initiallyEnabled = yield* telemetryEnabled;
+  if (!initiallyEnabled) {
+    return AnalyticsService.of({
+      record: () => Effect.void,
+      flush: Effect.void,
+    });
+  }
   const identifier = yield* getTelemetryIdentifier;
   const bufferRef = yield* Ref.make<ReadonlyArray<BufferedAnalyticsEvent>>([]);
   const clientType = serverConfig.mode === "desktop" ? "desktop-app" : "cli-web-client";
@@ -106,7 +119,7 @@ export const make = Effect.gen(function* () {
   const sendBatch = Effect.fn("AnalyticsService.sendBatch")(function* (
     events: ReadonlyArray<BufferedAnalyticsEvent>,
   ) {
-    if (!telemetryConfig.enabled || !identifier) return;
+    if (!(yield* telemetryEnabled) || !identifier) return;
 
     const payload = {
       api_key: telemetryConfig.posthogKey,
@@ -134,6 +147,10 @@ export const make = Effect.gen(function* () {
   });
 
   const flush: AnalyticsService["Service"]["flush"] = Effect.gen(function* () {
+    if (!(yield* telemetryEnabled)) {
+      yield* Ref.set(bufferRef, []);
+      return;
+    }
     while (true) {
       const batch = yield* Ref.modify(bufferRef, (current) => {
         if (current.length === 0) {
@@ -160,7 +177,7 @@ export const make = Effect.gen(function* () {
 
   const record: AnalyticsService["Service"]["record"] = Effect.fn("AnalyticsService.record")(
     function* (event, properties) {
-      if (!telemetryConfig.enabled || !identifier) return;
+      if (!(yield* telemetryEnabled) || !identifier) return;
 
       const enqueueResult = yield* enqueueBufferedEvent(event, properties);
       if (enqueueResult.dropped) {

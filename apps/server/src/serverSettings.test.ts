@@ -547,6 +547,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       assert.equal(next.addProjectBaseDirectory, "~/Development");
       assert.deepEqual(next.observability, {
+        telemetryEnabled: true,
         otlpTracesUrl: "http://localhost:4318/v1/traces",
         otlpMetricsUrl: "http://localhost:4318/v1/metrics",
       });
