@@ -27,9 +27,9 @@ import {
   ServerCliDevelopmentIconTargetMissingError,
   ServerCliPublishIconSourceMissingError,
   ServerCliPublishIconTargetMissingError,
+} from "./cliErrors.ts";
 
 const PublishedPackageName = "@pearcecodes/t3code";
-} from "./cliErrors.ts";
 
 interface PackageJson {
   name: string;

@@ -5025,7 +5025,9 @@ function ChatViewContent(props: ChatViewProps) {
           ...(steerOptimisticAttachments.length > 0
             ? { attachments: steerOptimisticAttachments }
             : {}),
+          turnId: null,
           createdAt: steerCreatedAt,
+          updatedAt: steerCreatedAt,
           streaming: false,
         },
       ]);
