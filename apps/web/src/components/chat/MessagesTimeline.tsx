@@ -1896,7 +1896,22 @@ function useStableRows(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
   });
 
   return useMemo(() => {
-    const nextState = computeStableMessagesTimelineRows(rows, prevState.current);
+    const prev = prevState.current;
+    const nextState = computeStableMessagesTimelineRows(rows, prev);
+    // [t3diag] Temporary diagnostic: how many rows kept their reference vs total.
+    // Normal streaming changes ~1 row; a "re-render everything" shows most/all rows changed.
+    const total = nextState.result.length;
+    let reused = 0;
+    for (const r of nextState.result) {
+      if (prev.byId.get(r.id) === r) reused += 1;
+    }
+    const changed = total - reused;
+    if (total > 10 && changed > total * 0.5) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[t3diag] timeline MASS re-render total=${total} reused=${reused} changed=${changed} at=${new Date().toISOString()}`,
+      );
+    }
     prevState.current = nextState;
     return nextState.result;
   }, [rows]);

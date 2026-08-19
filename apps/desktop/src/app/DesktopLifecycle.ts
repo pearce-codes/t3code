@@ -116,7 +116,13 @@ function handleBeforeQuit(
     void runEffect(
       Effect.gen(function* () {
         const electronApp = yield* ElectronApp.ElectronApp;
-        yield* electronApp.quit;
+        // Graceful shutdown has completed (backend stopped via the scope
+        // finalizer that `shutdown.markComplete` is ensured after). Force-exit
+        // instead of calling `app.quit()` again: a second `app.quit()` re-emits
+        // `before-quit` and relies on the `quitAllowed` guard, which races and
+        // can leave the app open until the user triggers Quit a second time.
+        // `exit(0)` terminates deterministically after cleanup has run.
+        yield* electronApp.exit(0);
       }).pipe(Effect.withSpan("desktop.lifecycle.quitAfterShutdown")),
     );
   });

@@ -119,6 +119,10 @@ interface KiroSessionContext {
   readonly turns: Array<{ id: TurnId; items: Array<unknown> }>;
   lastPlanFingerprint: string | undefined;
   activeTurnId: TurnId | undefined;
+  // Resolves when the in-flight prompt turn settles (any stop reason). Used by
+  // steerTurn to safely await a cancelled turn before resending, since ACP
+  // prompts are not serialized.
+  activeTurnGate: Deferred.Deferred<void> | undefined;
   stopped: boolean;
 }
 
@@ -633,6 +637,7 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
             turns: [],
             lastPlanFingerprint: undefined,
             activeTurnId: undefined,
+            activeTurnGate: undefined,
             stopped: false,
           };
 
@@ -782,6 +787,8 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
         });
         ctx.activeTurnId = turnId;
         ctx.lastPlanFingerprint = undefined;
+        const turnGate = yield* Deferred.make<void>();
+        ctx.activeTurnGate = turnGate;
         ctx.session = {
           ...ctx.session,
           activeTurnId: turnId,
@@ -849,6 +856,17 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
             Effect.mapError((error) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
             ),
+            Effect.ensuring(
+              Deferred.succeed(turnGate, undefined).pipe(
+                Effect.andThen(
+                  Effect.sync(() => {
+                    if (ctx.activeTurnGate === turnGate) {
+                      ctx.activeTurnGate = undefined;
+                    }
+                  }),
+                ),
+              ),
+            ),
           );
 
         ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
@@ -876,6 +894,33 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
           turnId,
           resumeCursor: ctx.session.resumeCursor,
         };
+      });
+
+    const steerTurn: KiroAdapterShape["steerTurn"] = (input) =>
+      Effect.gen(function* () {
+        const ctx = yield* requireSession(input.threadId);
+        const gate = ctx.activeTurnGate;
+        if (gate !== undefined) {
+          // ACP has no mid-turn input channel, so steer = cancel + resend.
+          // Cancel the active turn (the agent marks in-progress tool calls
+          // cancelled), then WAIT for it to actually settle before resending —
+          // a concurrent session/prompt is not allowed and would error.
+          yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
+          yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+          yield* Effect.ignore(
+            ctx.acp.cancel.pipe(
+              Effect.mapError((error) =>
+                mapAcpToAdapterError(PROVIDER, input.threadId, "session/cancel", error),
+              ),
+            ),
+          );
+          yield* Deferred.await(gate);
+        }
+        return yield* sendTurn({
+          threadId: input.threadId,
+          ...(input.input !== undefined ? { input: input.input } : {}),
+          ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
+        });
       });
 
     const interruptTurn: KiroAdapterShape["interruptTurn"] = (threadId) =>
@@ -984,6 +1029,7 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
       capabilities: { sessionModelSwitch: "unsupported" },
       startSession,
       sendTurn,
+      steerTurn,
       interruptTurn,
       readThread,
       rollbackThread,

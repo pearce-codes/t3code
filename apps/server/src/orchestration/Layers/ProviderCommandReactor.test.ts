@@ -311,6 +311,7 @@ describe("ProviderCommandReactor", () => {
     const service: ProviderServiceShape = {
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
+      steerTurn: sendTurn as unknown as ProviderServiceShape["steerTurn"],
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
@@ -561,6 +562,7 @@ describe("ProviderCommandReactor", () => {
         }),
       );
       const now = "2026-01-01T00:00:00.000Z";
+
 
       yield* harness.engine.dispatch({
         type: "thread.turn.start",

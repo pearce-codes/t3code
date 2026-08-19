@@ -577,3 +577,27 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     input.localDispatch.sessionUpdatedAt !== (session?.updatedAt ?? null)
   );
 }
+
+/**
+ * Decision for how the composer should handle a submit, given the current
+ * session phase.
+ *
+ * While a turn is running the message must NOT fall through to a normal send
+ * (which would dispatch a second concurrent `thread.turn.start` against the
+ * active turn — that interrupts the run, surfaces provider "Internal error"
+ * defects, and churns the optimistic message). Instead it is dispatched as a
+ * mid-turn `thread.turn.steer`, which the server routes to the provider's
+ * steering path (Codex `turn/steer`, Claude prompt queue, Kiro cancel+resend).
+ * Empty submits are ignored.
+ */
+export type ComposerSubmitDecision = "send" | "steer" | "queue" | "ignore";
+
+export function classifyComposerSubmit(input: {
+  phase: SessionPhase;
+  hasSendableContent: boolean;
+}): ComposerSubmitDecision {
+  if (input.phase === "running") {
+    return input.hasSendableContent ? "steer" : "ignore";
+  }
+  return "send";
+}

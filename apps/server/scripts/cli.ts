@@ -27,6 +27,8 @@ import {
   ServerCliDevelopmentIconTargetMissingError,
   ServerCliPublishIconSourceMissingError,
   ServerCliPublishIconTargetMissingError,
+
+const PublishedPackageName = "@pearcecodes/t3code";
 } from "./cliErrors.ts";
 
 interface PackageJson {
@@ -212,6 +214,8 @@ const publishCmd = Command.make(
     appVersion: Flag.string("app-version").pipe(Flag.optional),
     provenance: Flag.boolean("provenance").pipe(Flag.withDefault(false)),
     dryRun: Flag.boolean("dry-run").pipe(Flag.withDefault(false)),
+    packOnly: Flag.boolean("pack-only").pipe(Flag.withDefault(false)),
+    outDir: Flag.string("out-dir").pipe(Flag.optional),
     verbose: Flag.boolean("verbose").pipe(Flag.withDefault(false)),
   },
   (config) =>
@@ -242,7 +246,7 @@ const publishCmd = Command.make(
           const workspaceCatalog = workspaceConfig.catalog ?? {};
           const workspaceOverrides = workspaceConfig.overrides ?? {};
           const pkg: PackageJson = {
-            name: serverPackageJson.name,
+            name: PublishedPackageName,
             repository: serverPackageJson.repository,
             bin: serverPackageJson.bin,
             type: serverPackageJson.type,
@@ -277,6 +281,21 @@ const publishCmd = Command.make(
             }
             yield* Effect.log("[cli] Applied package metadata and publish icon overrides");
 
+            if (config.packOnly) {
+              const outDir = Option.getOrElse(config.outDir, () => repoRoot);
+              const packArgs = ["pm", "pack", "--pack-destination", outDir];
+              const packCommand = yield* resolveSpawnCommand("vp", packArgs);
+              yield* Effect.log(`[cli] Packing local tarball to ${outDir} (no publish)`);
+              yield* runCommand(
+                ChildProcess.make(packCommand.command, packCommand.args, {
+                  cwd: serverDir,
+                  stdout: config.verbose ? "inherit" : "ignore",
+                  stderr: "inherit",
+                  shell: packCommand.shell,
+                }),
+              );
+              return;
+            }
             const args = createVpPmPublishArgs(config);
             const spawnCommand = yield* resolveSpawnCommand("vp", ["pm", ...args]);
 

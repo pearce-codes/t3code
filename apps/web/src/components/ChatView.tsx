@@ -292,6 +292,7 @@ import {
   buildLocalDraftThread,
   buildLoadingThreadFromShell,
   buildThreadTurnInterruptInput,
+  classifyComposerSubmit,
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
@@ -1225,6 +1226,7 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const steerThreadTurn = useAtomCommand(threadEnvironment.steerTurn, { reportFailure: false });
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
@@ -4975,6 +4977,112 @@ function ChatViewContent(props: ChatViewProps) {
         composerPreviewAnnotations.length +
         composerReviewComments.length,
     });
+    const submitDecision = classifyComposerSubmit({
+      phase,
+      hasSendableContent,
+    });
+    if (submitDecision !== "send") {
+      if (submitDecision === "ignore") {
+        return;
+      }
+      // submitDecision === "steer": a turn is running — dispatch a mid-turn
+      // steer against the active turn instead of a concurrent `thread.turn.start`.
+      // The server routes it to the provider steering path (Codex turn/steer,
+      // Claude prompt queue, Kiro cancel+resend) and records the user message.
+      if (!activeThread || !isServerThread) {
+        return;
+      }
+      const steerImages = [...composerImages];
+      const steerTerminalContexts = [...sendableComposerTerminalContexts];
+      const steerMessageId = newMessageId();
+      const steerCreatedAt = new Date().toISOString();
+      const steerMessageText = appendTerminalContextsToPrompt(promptForSend, steerTerminalContexts);
+      const steerOutgoingText = formatOutgoingPrompt({
+        provider: ctxSelectedProvider,
+        model: ctxSelectedModel,
+        models: ctxSelectedProviderModels,
+        effort: ctxSelectedPromptEffort,
+        text: steerMessageText || IMAGE_ONLY_BOOTSTRAP_PROMPT,
+      });
+      const steerOptimisticAttachments = steerImages.map((image) => ({
+        type: "image" as const,
+        id: image.id,
+        name: image.name,
+        mimeType: image.mimeType,
+        sizeBytes: image.sizeBytes,
+        previewUrl: image.previewUrl,
+      }));
+      isAtEndRef.current = true;
+      showScrollDebouncer.current.cancel();
+      setShowScrollToBottom(false);
+      await legendListRef.current?.scrollToEnd?.({ animated: false });
+      setOptimisticUserMessages((existing) => [
+        ...existing,
+        {
+          id: steerMessageId,
+          role: "user",
+          text: steerOutgoingText,
+          ...(steerOptimisticAttachments.length > 0
+            ? { attachments: steerOptimisticAttachments }
+            : {}),
+          createdAt: steerCreatedAt,
+          streaming: false,
+        },
+      ]);
+      if (expiredTerminalContextCount > 0) {
+        const toastCopy = buildExpiredTerminalContextToastCopy(
+          expiredTerminalContextCount,
+          "omitted",
+        );
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: toastCopy.title,
+            description: toastCopy.description,
+          }),
+        );
+      }
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      const steerAttachments = await Promise.all(
+        steerImages.map(async (image) => ({
+          type: "image" as const,
+          name: image.name,
+          mimeType: image.mimeType,
+          sizeBytes: image.sizeBytes,
+          dataUrl: await readFileAsDataUrl(image.file),
+        })),
+      );
+      const steerResult = await steerThreadTurn({
+        environmentId,
+        input: {
+          threadId: activeThread.id,
+          message: {
+            messageId: steerMessageId,
+            role: "user",
+            text: steerOutgoingText,
+            attachments: steerAttachments,
+          },
+          createdAt: steerCreatedAt,
+        },
+      });
+      if (steerResult._tag === "Failure") {
+        setOptimisticUserMessages((existing) =>
+          existing.filter((message) => message.id !== steerMessageId),
+        );
+        if (!isAtomCommandInterrupted(steerResult)) {
+          const error = squashAtomCommandFailure(steerResult);
+          setThreadError(
+            activeThread.id,
+            error instanceof Error ? error.message : "Failed to steer the running turn.",
+          );
+        }
+      }
+      return;
+    }
+    if (phase === "running" && sendInFlightRef.current) return;
+    if (phase !== "running" && (isSendBusy || sendInFlightRef.current)) return;
     if (!directAnnotation && showPlanFollowUpPrompt && activeProposedPlan) {
       const followUp = resolvePlanFollowUpSubmission({
         draftText: trimmed,

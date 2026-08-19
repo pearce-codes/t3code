@@ -17,6 +17,7 @@ import {
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderSendTurnInput,
+  ProviderSteerTurnInput,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   type ProviderInstanceId,
@@ -774,6 +775,57 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
+  const steerTurn: ProviderServiceMethod<"steerTurn"> = Effect.fn("steerTurn")(function* (
+    rawInput,
+  ) {
+    const input = yield* decodeInputOrValidationError({
+      operation: "ProviderService.steerTurn",
+      schema: ProviderSteerTurnInput,
+      payload: rawInput,
+    });
+    return yield* Effect.gen(function* () {
+      const routed = yield* resolveRoutableSession({
+        threadId: input.threadId,
+        operation: "ProviderService.steerTurn",
+        allowRecovery: true,
+      });
+      yield* Effect.annotateCurrentSpan({
+        "provider.operation": "steer-turn",
+        "provider.kind": routed.adapter.provider,
+        "provider.thread_id": input.threadId,
+      });
+      const sendInput: ProviderSendTurnInput = {
+        threadId: input.threadId,
+        ...(input.input !== undefined ? { input: input.input } : {}),
+        ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
+      };
+      const turn = routed.adapter.steerTurn
+        ? yield* routed.adapter.steerTurn(input)
+        : yield* Effect.gen(function* () {
+            // Generic fallback for adapters without native mid-turn steering:
+            // cancel the active turn, then resend the input as a fresh turn.
+            yield* routed.adapter.interruptTurn(routed.threadId);
+            return yield* routed.adapter.sendTurn(sendInput);
+          });
+      yield* directory.upsert({
+        threadId: input.threadId,
+        provider: routed.adapter.provider,
+        providerInstanceId: routed.instanceId,
+        status: "running",
+        ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
+        runtimePayload: {
+          activeTurnId: turn.turnId,
+          lastRuntimeEvent: "provider.steerTurn",
+          lastRuntimeEventAt: yield* nowIso,
+        },
+      });
+      yield* analytics.record("provider.turn.steered", {
+        provider: routed.adapter.provider,
+      });
+      return turn;
+    });
+  });
+
   const interruptTurn: ProviderServiceMethod<"interruptTurn"> = Effect.fn("interruptTurn")(
     function* (rawInput) {
       const input = yield* decodeInputOrValidationError({
@@ -1128,6 +1180,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   return {
     startSession,
     sendTurn,
+    steerTurn,
     interruptTurn,
     respondToRequest,
     respondToUserInput,

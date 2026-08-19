@@ -16,6 +16,7 @@ import {
   buildExpiredTerminalContextToastCopy,
   buildLoadingThreadFromShell,
   buildThreadTurnInterruptInput,
+  classifyComposerSubmit,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
   dismissBranchMismatchForSession,
@@ -715,5 +716,23 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingApproval: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingUserInput: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, threadError: "failed" })).toBe(true);
+  });
+});
+
+describe("classifyComposerSubmit", () => {
+  it("sends normally when no turn is running", () => {
+    expect(classifyComposerSubmit({ phase: "ready", hasSendableContent: true })).toBe("send");
+  });
+
+  it("dispatches a steer while a turn is running (never a concurrent turn.start)", () => {
+    // Regression: a send while running previously fell through and dispatched a
+    // second concurrent `thread.turn.start`, causing provider "Internal error"
+    // and the optimistic message to disappear. It must instead resolve to a
+    // mid-turn steer.
+    expect(classifyComposerSubmit({ phase: "running", hasSendableContent: true })).toBe("steer");
+  });
+
+  it("ignores an empty submit while running", () => {
+    expect(classifyComposerSubmit({ phase: "running", hasSendableContent: false })).toBe("ignore");
   });
 });
