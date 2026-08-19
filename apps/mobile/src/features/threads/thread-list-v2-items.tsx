@@ -528,7 +528,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       { id: "settle", title: "Settle", image: "checkmark" },
       {
         id: "snooze",
-        title: "Snooze",
+        title: "Snooze for…",
         image: "clock",
         subactions: snoozePresetActions,
       },
@@ -644,11 +644,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         ? {
             accessibilityLabel: `Choose when to snooze ${thread.title}`,
             icon: "clock" as const,
-            label: "Snooze",
+            label: "Snooze for…",
             menu: {
               actions: snoozePresetActions,
               onPressAction: handleMenuAction,
-              title: "Snooze until",
+              title: "Snooze for…",
             },
             onPress: () => undefined,
           }

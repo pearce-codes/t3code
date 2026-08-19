@@ -8,6 +8,7 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
@@ -17,6 +18,7 @@ import {
   parseGenericCliVersion,
   providerModelsFromSettings,
   spawnAndCollect,
+  AUTH_PROBE_TIMEOUT_MS,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
 
@@ -24,6 +26,7 @@ const KIRO_PRESENTATION = {
   displayName: "Kiro",
   badgeLabel: "Early Access",
   showInteractionModeToggle: true,
+  requiresNewThreadForModelChange: true,
 } as const;
 
 function titleCaseSlug(value: string): string {
@@ -188,6 +191,71 @@ export const checkKiroProviderStatus = Effect.fn("checkKiroProviderStatus")(func
   }
 
   const version = parseGenericCliVersion(versionExit.value.stdout) ?? null;
+  if (versionExit.value.code !== 0) {
+    return buildServerProvider({
+      presentation: KIRO_PRESENTATION,
+      enabled: true,
+      checkedAt,
+      models,
+      probe: {
+        installed: true,
+        version,
+        status: "error",
+        auth: { status: "unknown" },
+        message: "Kiro CLI was found, but `kiro-cli --version` failed.",
+      },
+    });
+  }
+
+  const whoamiCommand = yield* resolveSpawnCommand(settings.binaryPath, ["whoami"], {
+    env: environment,
+  });
+  const whoamiExit = yield* Effect.exit(
+    spawnAndCollect(
+      settings.binaryPath,
+      ChildProcess.make(whoamiCommand.command, whoamiCommand.args, {
+        env: environment,
+        shell: whoamiCommand.shell,
+      }),
+    ).pipe(Effect.timeoutOption(AUTH_PROBE_TIMEOUT_MS)),
+  );
+
+  if (whoamiExit._tag === "Failure" || Option.isNone(whoamiExit.value)) {
+    return buildServerProvider({
+      presentation: KIRO_PRESENTATION,
+      enabled: true,
+      checkedAt,
+      models,
+      probe: {
+        installed: true,
+        version,
+        status: "warning",
+        auth: { status: "unknown", type: "kiro" },
+        message:
+          whoamiExit._tag === "Failure"
+            ? "Kiro CLI is available, but its authentication status could not be checked."
+            : "Kiro CLI is available, but `kiro-cli whoami` timed out.",
+      },
+    });
+  }
+
+  const whoami = whoamiExit.value.value;
+  if (whoami.code !== 0) {
+    return buildServerProvider({
+      presentation: KIRO_PRESENTATION,
+      enabled: true,
+      checkedAt,
+      models,
+      probe: {
+        installed: true,
+        version,
+        status: "error",
+        auth: { status: "unauthenticated", type: "kiro" },
+        message: "Kiro CLI is not signed in. Run `kiro-cli login`, then refresh provider status.",
+      },
+    });
+  }
+
   return buildServerProvider({
     presentation: KIRO_PRESENTATION,
     enabled: true,
@@ -197,8 +265,10 @@ export const checkKiroProviderStatus = Effect.fn("checkKiroProviderStatus")(func
       installed: true,
       version,
       status: "ready",
-      auth: { status: "unknown", type: "kiro" },
-      message: version ? `Kiro CLI v${version} is available.` : "Kiro CLI is available.",
+      auth: { status: "authenticated", type: "kiro" },
+      message: version
+        ? `Kiro CLI v${version} is installed and signed in.`
+        : "Kiro CLI is installed and signed in.",
     },
   });
 });

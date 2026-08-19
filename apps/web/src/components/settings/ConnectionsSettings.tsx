@@ -3,6 +3,7 @@ import {
   PlusIcon,
   QrCodeIcon,
   RefreshCwIcon,
+  Settings2Icon,
   TerminalIcon,
 } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
@@ -28,7 +29,13 @@ import {
   type DesktopWslState,
   type EnvironmentId,
 } from "@t3tools/contracts";
-import { connectionStatusText } from "@t3tools/client-runtime/connection";
+import {
+  BearerConnectionProfile,
+  SshConnectionProfile,
+  connectionStatusText,
+  type ConnectionProfile,
+} from "@t3tools/client-runtime/connection";
+import { deriveWsBaseUrl, normalizeHttpBaseUrl } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -1338,6 +1345,201 @@ type SavedBackendListRowProps = {
   onRemove: (environmentId: EnvironmentId) => void;
 };
 
+function SavedBackendSettingsDialog({
+  environment,
+  profile,
+}: {
+  readonly environment: EnvironmentPresentation;
+  readonly profile: Extract<
+    ConnectionProfile,
+    { _tag: "BearerConnectionProfile" | "SshConnectionProfile" }
+  >;
+}) {
+  const updateProfile = useAtomCommand(environmentCatalog.updateProfile, { reportFailure: false });
+  const [open, setOpen] = useState(false);
+  const [label, setLabel] = useState(profile.label);
+  const [remoteUrl, setRemoteUrl] = useState(
+    profile._tag === "BearerConnectionProfile" ? profile.httpBaseUrl : "",
+  );
+  const [sshAlias, setSshAlias] = useState(
+    profile._tag === "SshConnectionProfile" ? profile.target.alias : "",
+  );
+  const [sshHostname, setSshHostname] = useState(
+    profile._tag === "SshConnectionProfile" ? profile.target.hostname : "",
+  );
+  const [sshUsername, setSshUsername] = useState(
+    profile._tag === "SshConnectionProfile" ? (profile.target.username ?? "") : "",
+  );
+  const [sshPort, setSshPort] = useState(
+    profile._tag === "SshConnectionProfile" && profile.target.port !== null
+      ? String(profile.target.port)
+      : "",
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const reset = () => {
+    setLabel(profile.label);
+    setRemoteUrl(profile._tag === "BearerConnectionProfile" ? profile.httpBaseUrl : "");
+    setSshAlias(profile._tag === "SshConnectionProfile" ? profile.target.alias : "");
+    setSshHostname(profile._tag === "SshConnectionProfile" ? profile.target.hostname : "");
+    setSshUsername(profile._tag === "SshConnectionProfile" ? (profile.target.username ?? "") : "");
+    setSshPort(
+      profile._tag === "SshConnectionProfile" && profile.target.port !== null
+        ? String(profile.target.port)
+        : "",
+    );
+    setError(null);
+  };
+
+  const save = async () => {
+    const nextLabel = label.trim();
+    if (!nextLabel) {
+      setError("Environment name is required.");
+      return;
+    }
+
+    let nextProfile: typeof profile;
+    try {
+      if (profile._tag === "BearerConnectionProfile") {
+        const httpBaseUrl = normalizeHttpBaseUrl(remoteUrl);
+        nextProfile = new BearerConnectionProfile({
+          connectionId: profile.connectionId,
+          environmentId: profile.environmentId,
+          label: nextLabel,
+          httpBaseUrl,
+          wsBaseUrl: deriveWsBaseUrl(httpBaseUrl),
+        });
+      } else {
+        const alias = sshAlias.trim();
+        const hostname = sshHostname.trim();
+        const portInput = sshPort.trim();
+        const port = portInput ? Number.parseInt(portInput, 10) : null;
+        if (!alias || !hostname) throw new Error("SSH alias and hostname are required.");
+        if (port !== null && (!Number.isInteger(port) || port <= 0 || port > 65_535)) {
+          throw new Error("SSH port must be between 1 and 65535.");
+        }
+        nextProfile = new SshConnectionProfile({
+          connectionId: profile.connectionId,
+          environmentId: profile.environmentId,
+          label: nextLabel,
+          target: {
+            alias,
+            hostname,
+            username: sshUsername.trim() || null,
+            port,
+          },
+        });
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The connection settings are invalid.");
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    const result = await updateProfile(nextProfile);
+    setSaving(false);
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        const cause = squashAtomCommandFailure(result);
+        setError(cause instanceof Error ? cause.message : "Could not save connection settings.");
+      }
+      return;
+    }
+    setOpen(false);
+    toastManager.add({
+      type: "success",
+      title: "Connection settings saved",
+      description: `${nextLabel} is reconnecting with the updated settings.`,
+    });
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) reset();
+        setOpen(nextOpen);
+      }}
+    >
+      <DialogTrigger
+        render={
+          <Button size="xs" variant="outline">
+            <Settings2Icon className="size-3" />
+            Settings
+          </Button>
+        }
+      />
+      <DialogPopup className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Connection settings</DialogTitle>
+          <DialogDescription>
+            Update how this client reaches {environment.label}. Saved credentials are preserved.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel>
+          <div className="space-y-4">
+            <label className="grid gap-1.5 text-sm">
+              <span className="font-medium">Environment name</span>
+              <Input value={label} onChange={(event) => setLabel(event.target.value)} />
+            </label>
+            {profile._tag === "BearerConnectionProfile" ? (
+              <label className="grid gap-1.5 text-sm">
+                <span className="font-medium">Server URL</span>
+                <Input
+                  value={remoteUrl}
+                  onChange={(event) => setRemoteUrl(event.target.value)}
+                  placeholder="https://server.example.com"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                />
+              </label>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="grid gap-1.5 text-sm">
+                  <span className="font-medium">SSH alias</span>
+                  <Input value={sshAlias} onChange={(event) => setSshAlias(event.target.value)} />
+                </label>
+                <label className="grid gap-1.5 text-sm">
+                  <span className="font-medium">Hostname</span>
+                  <Input
+                    value={sshHostname}
+                    onChange={(event) => setSshHostname(event.target.value)}
+                  />
+                </label>
+                <label className="grid gap-1.5 text-sm">
+                  <span className="font-medium">Username</span>
+                  <Input
+                    value={sshUsername}
+                    onChange={(event) => setSshUsername(event.target.value)}
+                  />
+                </label>
+                <label className="grid gap-1.5 text-sm">
+                  <span className="font-medium">Port</span>
+                  <Input
+                    value={sshPort}
+                    onChange={(event) => setSshPort(event.target.value)}
+                    inputMode="numeric"
+                    placeholder="22"
+                  />
+                </label>
+              </div>
+            )}
+            {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          </div>
+        </DialogPanel>
+        <DialogFooter>
+          <DialogClose render={<Button variant="outline" disabled={saving} />}>Cancel</DialogClose>
+          <Button disabled={saving} onClick={() => void save()}>
+            {saving ? "Saving…" : "Save settings"}
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
 function SavedBackendListRow({
   environment,
   removingEnvironmentId,
@@ -1403,6 +1605,13 @@ function SavedBackendListRow({
   // environment you connect to or remove here — its lifecycle is driven by the
   // WSL on/off + distro picker on this page.
   const isWslEnvironment = isDesktopLocalConnectionTarget(environment.entry.target);
+  const editableProfile =
+    !isWslEnvironment &&
+    Option.isSome(environment.entry.profile) &&
+    (environment.entry.profile.value._tag === "BearerConnectionProfile" ||
+      environment.entry.profile.value._tag === "SshConnectionProfile")
+      ? environment.entry.profile.value
+      : null;
 
   return (
     <div className={ITEM_ROW_CLASSNAME}>
@@ -1461,6 +1670,9 @@ function SavedBackendListRow({
           ) : null}
         </div>
         <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
+          {editableProfile ? (
+            <SavedBackendSettingsDialog environment={environment} profile={editableProfile} />
+          ) : null}
           {versionMismatch &&
           (serverUpdateState.status === "idle" || serverUpdateState.status === "failed") ? (
             <ServerUpdateAction

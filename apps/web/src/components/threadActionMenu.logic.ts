@@ -1,5 +1,7 @@
 import type { ContextMenuItem } from "@t3tools/contracts";
+import type { ThreadColor } from "@t3tools/contracts";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
+import { buildThreadColorMenuItem, type ThreadColorMenuId } from "../threadColors";
 
 /**
  * Ids for the per-thread action menu. Snooze presets are dispatched as
@@ -18,6 +20,8 @@ export type ThreadActionMenuId =
   | "rename"
   | "regenerate-title"
   | "mark-unread"
+  | "export-session"
+  | ThreadColorMenuId
   | "copy-path"
   | "copy-branch"
   | "copy-thread-id"
@@ -35,7 +39,9 @@ export interface ThreadActionMenuState {
     readonly snooze: boolean;
     readonly pinning: boolean;
     readonly titleRegeneration: boolean;
+    readonly colorCoding?: boolean;
   };
+  readonly color?: ThreadColor | null;
   readonly snoozePresets: ReadonlyArray<SnoozePreset>;
 }
 
@@ -79,7 +85,7 @@ export function buildThreadActionMenuItems(
             ? { id: "unsnooze" as const, label: "Wake thread" }
             : {
                 id: "snooze" as const,
-                label: "Snooze",
+                label: "Snooze for…",
                 disabled: !state.canSnoozeNow,
                 children: state.snoozePresets.map((preset) => ({
                   id: `snooze:${preset.id}` as const,
@@ -99,6 +105,8 @@ export function buildThreadActionMenuItems(
         ]
       : []),
     { id: "mark-unread", label: "Mark unread" },
+    { id: "export-session", label: "Export session" },
+    ...(state.supports.colorCoding ? [buildThreadColorMenuItem(state.color ?? null)] : []),
     { id: "copy-path", label: "Copy path", icon: "copy" },
     ...(state.branch ? [{ id: "copy-branch" as const, label: "Copy branch", icon: "copy" }] : []),
     { id: "copy-thread-id", label: "Copy thread ID", icon: "copy" },

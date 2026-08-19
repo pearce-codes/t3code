@@ -33,6 +33,7 @@ import {
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
 } from "./orchestration.ts";
+import { SessionTransferArchive, SessionTransferImportResult } from "./sessionTransfer.ts";
 import {
   PullRequestDiffInput,
   PullRequestDiffResult,
@@ -519,6 +520,22 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
       payload: EnvironmentOrchestrationThreadSnapshotQuery,
       success: OrchestrationThreadDetailSnapshot,
       error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("exportSession", "/api/orchestration/threads/:threadId/export-session", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentOrchestrationThreadSnapshotParams,
+      success: SessionTransferArchive,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("importSession", "/api/orchestration/import-session", {
+      headers: OptionalBearerHeaders,
+      payload: SessionTransferArchive,
+      success: SessionTransferImportResult,
+      error: EnvironmentOrchestrationDispatchErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(

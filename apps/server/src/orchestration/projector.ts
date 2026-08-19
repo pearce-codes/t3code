@@ -456,6 +456,7 @@ export function projectEvent(
               : {}),
             ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
             ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+            ...(payload.color !== undefined ? { color: payload.color } : {}),
             updatedAt: payload.updatedAt,
           }),
         })),

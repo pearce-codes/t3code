@@ -396,6 +396,13 @@ const program = Effect.gen(function* () {
     }),
   );
 
+  yield* agent.handleSetSessionMode((request) =>
+    Effect.sync(() => {
+      currentModeId = request.modeId;
+      return {};
+    }),
+  );
+
   yield* agent.handleSetSessionConfigOption((request) =>
     Effect.gen(function* () {
       if (exitOnSetConfigOption) {

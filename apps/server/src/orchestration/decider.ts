@@ -1,5 +1,6 @@
 import {
   EventId,
+  TurnId,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
@@ -381,6 +382,138 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       };
+    }
+
+    case "thread.session.import": {
+      yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      yield* requireThreadAbsent({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+
+      const transferMetadata = { sessionTransfer: true as const };
+      const events: PlannedOrchestrationEvent[] = [
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+            metadata: transferMetadata,
+          })),
+          type: "thread.created",
+          payload: {
+            threadId: command.threadId,
+            projectId: command.projectId,
+            title: command.title,
+            modelSelection: command.modelSelection,
+            runtimeMode: command.runtimeMode,
+            interactionMode: command.interactionMode,
+            branch: command.branch,
+            worktreePath: command.worktreePath,
+            createdAt: command.createdAt,
+            updatedAt: command.createdAt,
+          },
+        },
+      ];
+      const crypto = yield* Crypto.Crypto;
+      let activeTurnId: TurnId | null = null;
+
+      const appendSessionEvent = Effect.fnUntraced(function* (
+        status: "running" | "idle",
+        activeTurn: typeof activeTurnId,
+        occurredAt: string,
+      ) {
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt,
+            commandId: command.commandId,
+            metadata: transferMetadata,
+          })),
+          type: "thread.session-set",
+          payload: {
+            threadId: command.threadId,
+            session: {
+              threadId: command.threadId,
+              status,
+              providerName: command.providerName,
+              ...(command.providerInstanceId !== undefined
+                ? { providerInstanceId: command.providerInstanceId }
+                : {}),
+              runtimeMode: command.runtimeMode,
+              activeTurnId: activeTurn,
+              lastError: null,
+              updatedAt: occurredAt,
+            },
+          },
+        });
+      });
+
+      for (const message of command.messages.toSorted((left, right) =>
+        left.createdAt.localeCompare(right.createdAt),
+      )) {
+        if (message.role === "user") {
+          if (activeTurnId !== null) {
+            yield* appendSessionEvent("idle", null, message.createdAt);
+          }
+          activeTurnId = TurnId.make(yield* crypto.randomUUIDv4);
+        }
+
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: message.createdAt,
+            commandId: command.commandId,
+            metadata: transferMetadata,
+          })),
+          type: "thread.message-sent",
+          payload: {
+            threadId: command.threadId,
+            messageId: message.messageId,
+            role: message.role,
+            text: message.text,
+            turnId: message.role === "assistant" ? activeTurnId : null,
+            streaming: false,
+            createdAt: message.createdAt,
+            updatedAt: message.updatedAt,
+          },
+        });
+
+        if (message.role === "user" && activeTurnId !== null) {
+          events.push({
+            ...(yield* withEventBase({
+              aggregateKind: "thread",
+              aggregateId: command.threadId,
+              occurredAt: message.createdAt,
+              commandId: command.commandId,
+              metadata: transferMetadata,
+            })),
+            type: "thread.turn-start-requested",
+            payload: {
+              threadId: command.threadId,
+              messageId: message.messageId,
+              modelSelection: command.modelSelection,
+              runtimeMode: command.runtimeMode,
+              interactionMode: command.interactionMode,
+              createdAt: message.createdAt,
+            },
+          });
+          yield* appendSessionEvent("running", activeTurnId, message.createdAt);
+        }
+      }
+
+      if (activeTurnId !== null) {
+        yield* appendSessionEvent("idle", null, command.updatedAt);
+      }
+      return events;
     }
 
     case "thread.delete": {
@@ -835,6 +968,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...(branch !== undefined ? { branch } : {}),
           ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+          ...(command.color !== undefined ? { color: command.color } : {}),
           updatedAt: occurredAt,
         },
       };

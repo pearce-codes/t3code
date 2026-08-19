@@ -122,6 +122,17 @@ npx t3 serve --tailscale-serve --tailscale-serve-port 8443
 Once paired, add projects normally: open the Command Palette and choose **Add Project**, then pick
 the environment the project lives on. Every saved environment is offered, not only the local one.
 
+### Editing a Saved Connection
+
+On web and desktop, open **Settings** → **Connections** and choose **Settings** beside a saved
+environment. Direct remote connections let you change the display name and server URL without
+pairing again. SSH connections let you change the display name, SSH alias, hostname, username, and
+port. T3 Code preserves the saved credential, closes the old connection, and reconnects with the
+updated address.
+
+T3 Connect and desktop-managed local backends do not show this button because their connection
+details are managed by their respective T3 Connect, network-access, or WSL controls.
+
 ### Option 3: Desktop-Managed SSH Launch
 
 Use this when you want the desktop app to start or reuse T3 Code on another machine over SSH.
@@ -164,6 +175,13 @@ nvm alias default 24
 ```
 
 With mise, asdf, fnm, or nodenv, make sure the tool's shim directory is installed and resolves to a Node version satisfying the range above without an interactive shell.
+
+Amazon Linux 2 is supported when a compatible Node.js build is already available on the host. Its
+older system glibc does not support T3 Code's accelerated native workspace index, so the server
+automatically uses the portable index instead. File browsing, path search, and content search remain
+available; on large workspaces they can be slower than on hosts using the native index. Do not
+replace the system glibc to run T3 Code. The first install also needs the standard native build tools
+(`gcc-c++`, `make`, and `python3`) so T3 Code can build terminal support against the host system.
 
 If reconnecting after an app update fails, retry the SSH launch once. The launcher now compares its generated runner script, stops stale launcher-managed remote servers, clears the SSH launch PID/port state, and starts a fresh remote server. You should not normally need to delete `~/.t3/ssh-launch` or kill `t3` processes manually.
 

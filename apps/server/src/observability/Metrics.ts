@@ -35,6 +35,25 @@ export const orchestrationCommandAckDuration = Metric.timer(
   },
 );
 
+export const threadSnoozeDelaySeconds = Metric.histogram("t3_thread_snooze_delay_seconds", {
+  description: "Requested thread snooze delay in seconds.",
+  boundaries: [
+    5 * 60,
+    15 * 60,
+    30 * 60,
+    60 * 60,
+    3 * 60 * 60,
+    6 * 60 * 60,
+    12 * 60 * 60,
+    24 * 60 * 60,
+    2 * 24 * 60 * 60,
+    3 * 24 * 60 * 60,
+    7 * 24 * 60 * 60,
+    14 * 24 * 60 * 60,
+    30 * 24 * 60 * 60,
+  ],
+});
+
 export const orchestrationEventsProcessedTotal = Metric.counter(
   "t3_orchestration_events_processed_total",
   {

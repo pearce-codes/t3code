@@ -26,7 +26,7 @@ describe("buildThreadActionMenuItems", () => {
         ...baseState,
         supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
       }),
-    ).toEqual(["rename", "mark-unread", "copy-path", "copy-thread-id", "delete"]);
+    ).toEqual(["rename", "mark-unread", "export-session", "copy-path", "copy-thread-id", "delete"]);
   });
 
   it("includes branch items only for threads with a branch", () => {
@@ -52,11 +52,38 @@ describe("buildThreadActionMenuItems", () => {
     expect(snooze?.children?.map((child) => child.id)).toEqual(["snooze:hour"]);
   });
 
+  it("labels the snooze submenu as a duration choice", () => {
+    expect(buildThreadActionMenuItems(baseState).find((item) => item.id === "snooze")?.label).toBe(
+      "Snooze for…",
+    );
+  });
+
   it("disables title regeneration while one is in flight", () => {
     const item = buildThreadActionMenuItems({ ...baseState, isRegeneratingTitle: true }).find(
       (candidate) => candidate.id === "regenerate-title",
     );
     expect(item).toMatchObject({ label: "Regenerating…", disabled: true });
+  });
+
+  it("offers the color palette and marks the current color", () => {
+    const item = buildThreadActionMenuItems({
+      ...baseState,
+      color: "purple",
+      supports: { ...baseState.supports, colorCoding: true },
+    }).find((candidate) => candidate.label === "Color");
+
+    expect(item?.children?.map((child) => child.id)).toEqual([
+      "color:red",
+      "color:orange",
+      "color:yellow",
+      "color:green",
+      "color:cyan",
+      "color:blue",
+      "color:purple",
+      "color:pink",
+      "color:clear",
+    ]);
+    expect(item?.children?.find((child) => child.id === "color:purple")?.label).toBe("✓ Purple");
   });
 
   it("marks delete as destructive and keeps it last", () => {

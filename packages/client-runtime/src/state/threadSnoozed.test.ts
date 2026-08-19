@@ -264,16 +264,24 @@ describe("resolveSnoozePresets", () => {
   it("offers the shared desktop and mobile choices", () => {
     const presets = resolveSnoozePresets(localDate(2026, 4, 8, 10));
     expect(presets.map((preset) => preset.id)).toEqual([
+      "fifteen-minutes",
+      "thirty-minutes",
       "hour",
       "three-hours",
       "evening",
       "tomorrow",
       "next-week",
     ]);
+    expect(presets.find((preset) => preset.id === "fifteen-minutes")?.snoozedUntil).toBe(
+      localDate(2026, 4, 8, 10, 15).toISOString(),
+    );
+    expect(presets.find((preset) => preset.id === "thirty-minutes")?.snoozedUntil).toBe(
+      localDate(2026, 4, 8, 10, 30).toISOString(),
+    );
     expect(presets.find((preset) => preset.id === "three-hours")?.snoozedUntil).toBe(
       localDate(2026, 4, 8, 13).toISOString(),
     );
-    expect(presets.find((preset) => preset.id === "three-hours")?.label).toBe("In 3 hours");
+    expect(presets.find((preset) => preset.id === "three-hours")?.label).toBe("3 hours");
     expect(presets.find((preset) => preset.id === "evening")?.label).toBe("This evening");
     expect(
       new Date(presets.find((preset) => preset.id === "tomorrow")!.snoozedUntil).getHours(),
@@ -282,6 +290,8 @@ describe("resolveSnoozePresets", () => {
 
   it("drops the evening choice once evening is near or past", () => {
     expect(resolveSnoozePresets(localDate(2026, 4, 8, 17, 30)).map((preset) => preset.id)).toEqual([
+      "fifteen-minutes",
+      "thirty-minutes",
       "hour",
       "three-hours",
       "tomorrow",

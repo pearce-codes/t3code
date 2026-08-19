@@ -1,13 +1,13 @@
-import {
-  type DirItem,
-  type DirSearchResult,
-  type FileItem,
+import type {
+  DirItem,
+  DirSearchResult,
   FileFinder,
-  type GrepCursor,
-  type MixedItem,
-  type MixedSearchResult,
-  type Result,
-  type SearchResult,
+  FileItem,
+  GrepCursor,
+  MixedItem,
+  MixedSearchResult,
+  Result,
+  SearchResult,
 } from "@ff-labs/fff-node";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -25,6 +25,11 @@ import type {
 } from "@t3tools/contracts";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 
+import {
+  createPortableWorkspaceFileFinder,
+  type PortableWorkspaceFileFinder,
+} from "./PortableWorkspaceFileFinder.ts";
+
 const WORKSPACE_INDEX_MAX_ENTRIES = 25_000;
 const WORKSPACE_INDEX_PAGE_SIZE = WORKSPACE_INDEX_MAX_ENTRIES + 2;
 const WORKSPACE_INDEX_SCAN_TIMEOUT = "15 seconds";
@@ -32,6 +37,37 @@ const WORKSPACE_INDEX_SCAN_TIMEOUT_MS = 15_000;
 const WORKSPACE_INDEX_IDLE_TTL = "15 minutes";
 const CONTENT_SEARCH_TIME_BUDGET_MS = 250;
 const CONTENT_SEARCH_MAX_MATCHES_PER_FILE = 100;
+const FFF_MINIMUM_GLIBC_VERSION = "2.30";
+
+type WorkspaceFileFinder = FileFinder | PortableWorkspaceFileFinder;
+
+function compareVersions(left: string, right: string): number {
+  const leftParts = left.split(".").map(Number);
+  const rightParts = right.split(".").map(Number);
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+export function supportsNativeWorkspaceSearch(input: {
+  readonly platform: NodeJS.Platform;
+  readonly glibcVersion?: string;
+}): boolean {
+  return (
+    input.platform !== "linux" ||
+    input.glibcVersion === undefined ||
+    compareVersions(input.glibcVersion, FFF_MINIMUM_GLIBC_VERSION) >= 0
+  );
+}
+
+function runtimeGlibcVersion(): string | undefined {
+  const report = process.report?.getReport() as
+    | { readonly header?: { readonly glibcVersionRuntime?: string } }
+    | undefined;
+  return report?.header?.glibcVersionRuntime;
+}
 
 export class WorkspaceSearchIndexCreateFailed extends Schema.TaggedErrorClass<WorkspaceSearchIndexCreateFailed>()(
   "WorkspaceSearchIndexCreateFailed",
@@ -301,6 +337,23 @@ const createFinder = Effect.fn("WorkspaceSearchIndex.createFinder")(function* (
   cwd: string,
   variant: WorkspaceSearchIndexVariant,
 ) {
+  const glibcVersion = runtimeGlibcVersion();
+  if (
+    !supportsNativeWorkspaceSearch({
+      platform: process.platform,
+      ...(glibcVersion !== undefined ? { glibcVersion } : {}),
+    })
+  ) {
+    return yield* Effect.promise(() => createPortableWorkspaceFileFinder(cwd));
+  }
+
+  const FileFinder = yield* Effect.promise(() =>
+    import("@ff-labs/fff-node").then((module) => module.FileFinder).catch(() => undefined),
+  );
+  if (FileFinder === undefined) {
+    return yield* Effect.promise(() => createPortableWorkspaceFileFinder(cwd));
+  }
+
   const result = yield* Effect.try({
     try: () =>
       FileFinder.create({
@@ -330,7 +383,7 @@ const createFinder = Effect.fn("WorkspaceSearchIndex.createFinder")(function* (
 
 const waitForIndexReady = Effect.fn("WorkspaceSearchIndex.waitForIndexReady")(function* <E>(
   cwd: string,
-  finder: FileFinder,
+  finder: WorkspaceFileFinder,
   onFailure: (input: { readonly reason: string; readonly cause?: unknown }) => E,
 ): Effect.fn.Return<void, E | WorkspaceSearchIndexScanTimedOut> {
   const result = yield* Effect.tryPromise({

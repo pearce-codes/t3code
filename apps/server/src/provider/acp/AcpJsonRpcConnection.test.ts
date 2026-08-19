@@ -65,6 +65,39 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
+  it.effect("sends legacy session mode changes with the active session id", () => {
+    const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+      yield* runtime.start();
+      yield* runtime.setSessionMode("plan");
+      yield* runtime.setSessionMode("plan");
+
+      const modeRequests = requestEvents.filter(
+        (event) => event.method === "session/set_mode" && event.status === "started",
+      );
+      expect(modeRequests).toHaveLength(1);
+      expect(modeRequests[0]?.payload).toEqual({ sessionId: "mock-session-1", modeId: "plan" });
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: mockAgentCommand,
+            args: mockAgentArgs,
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
   it.effect("starts a session, prompts, and emits normalized events against the mock agent", () =>
     Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveSnoozePresets, snoozeWakeDescription } from "./Sidebar.snooze";
+import {
+  defaultSnoozeUntilInput,
+  formatSnoozeUntilInput,
+  resolveCustomSnoozeFor,
+  resolveCustomSnoozeUntil,
+  resolveSnoozePresets,
+  snoozeWakeDescription,
+} from "./Sidebar.snooze";
 
 // Local-time constructor so preset math is timezone-stable in tests.
 function localDate(year: number, month: number, day: number, hour: number, minute = 0): Date {
@@ -8,16 +15,20 @@ function localDate(year: number, month: number, day: number, hour: number, minut
 }
 
 describe("resolveSnoozePresets", () => {
-  it("offers one hour, three hours, evening, tomorrow, and next week in the morning", () => {
+  it("offers durations, evening, tomorrow, and next week in the morning", () => {
     // Wednesday 2026-04-08 10:00 local.
     const presets = resolveSnoozePresets(localDate(2026, 4, 8, 10), "locale");
     expect(presets.map((preset) => preset.id)).toEqual([
+      "fifteen-minutes",
+      "thirty-minutes",
       "hour",
       "three-hours",
       "evening",
       "tomorrow",
       "next-week",
     ]);
+    expect(new Date(presets[0]!.snoozedUntil).getMinutes()).toBe(15);
+    expect(new Date(presets[1]!.snoozedUntil).getMinutes()).toBe(30);
     const threeHours = presets.find((preset) => preset.id === "three-hours");
     expect(new Date(threeHours!.snoozedUntil).getHours()).toBe(13);
     const evening = presets.find((preset) => preset.id === "evening");
@@ -48,10 +59,24 @@ describe("resolveSnoozePresets", () => {
   it("drops the evening preset once evening is near or past", () => {
     expect(
       resolveSnoozePresets(localDate(2026, 4, 8, 17, 30), "locale").map((preset) => preset.id),
-    ).toEqual(["hour", "three-hours", "tomorrow", "next-week"]);
+    ).toEqual([
+      "fifteen-minutes",
+      "thirty-minutes",
+      "hour",
+      "three-hours",
+      "tomorrow",
+      "next-week",
+    ]);
     expect(
       resolveSnoozePresets(localDate(2026, 4, 8, 21), "locale").map((preset) => preset.id),
-    ).toEqual(["hour", "three-hours", "tomorrow", "next-week"]);
+    ).toEqual([
+      "fifteen-minutes",
+      "thirty-minutes",
+      "hour",
+      "three-hours",
+      "tomorrow",
+      "next-week",
+    ]);
   });
 
   it("puts next week a full week out when today is Monday", () => {
@@ -67,6 +92,37 @@ describe("resolveSnoozePresets", () => {
 
     expect(twelveHour.find((preset) => preset.id === "evening")!.whenLabel).toMatch(/PM/i);
     expect(twentyFourHour.find((preset) => preset.id === "evening")!.whenLabel).toBe("18:00");
+  });
+});
+
+describe("custom snooze values", () => {
+  const now = localDate(2026, 4, 8, 10);
+
+  it("resolves custom delays in minutes, hours, and days", () => {
+    expect(resolveCustomSnoozeFor(now, "45", "minutes")).toBe(
+      localDate(2026, 4, 8, 10, 45).toISOString(),
+    );
+    expect(resolveCustomSnoozeFor(now, "2", "hours")).toBe(localDate(2026, 4, 8, 12).toISOString());
+    expect(resolveCustomSnoozeFor(now, "2", "days")).toBe(
+      new Date(now.getTime() + 2 * 24 * 60 * 60 * 1_000).toISOString(),
+    );
+  });
+
+  it("rejects empty, zero, and negative delays", () => {
+    expect(resolveCustomSnoozeFor(now, "", "minutes")).toBeNull();
+    expect(resolveCustomSnoozeFor(now, "0", "hours")).toBeNull();
+    expect(resolveCustomSnoozeFor(now, "-1", "days")).toBeNull();
+  });
+
+  it("accepts only future until values", () => {
+    const future = formatSnoozeUntilInput(localDate(2026, 4, 9, 9));
+    expect(resolveCustomSnoozeUntil(future, now)).toBe(localDate(2026, 4, 9, 9).toISOString());
+    expect(resolveCustomSnoozeUntil(formatSnoozeUntilInput(now), now)).toBeNull();
+    expect(resolveCustomSnoozeUntil("not-a-date", now)).toBeNull();
+  });
+
+  it("defaults until to roughly an hour ahead on a 15-minute boundary", () => {
+    expect(defaultSnoozeUntilInput(localDate(2026, 4, 8, 10, 7))).toBe("2026-04-08T11:15");
   });
 });
 

@@ -48,7 +48,7 @@ import {
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
-import { acpPermissionOutcome, mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
+import { mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
 import {
   makeAcpAssistantItemEvent,
   makeAcpContentDeltaEvent,
@@ -64,7 +64,11 @@ import {
   parsePermissionRequest,
 } from "../acp/AcpRuntimeModel.ts";
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
-import { applyKiroAcpModelSelection, makeKiroAcpRuntime } from "../acp/KiroAcpSupport.ts";
+import {
+  applyKiroAcpModelSelection,
+  makeKiroAcpRuntime,
+  selectKiroPermissionOptionId,
+} from "../acp/KiroAcpSupport.ts";
 import { type KiroAdapterShape } from "../Services/KiroAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { resolveKiroAcpBaseModelId } from "./KiroProvider.ts";
@@ -264,8 +268,14 @@ function applyRequestedSessionConfiguration<E>(input: {
     if (!requestedModeId) {
       return;
     }
-
-    void requestedModeId;
+    yield* input.runtime.setSessionMode(requestedModeId).pipe(
+      Effect.mapError((cause) =>
+        input.mapError({
+          cause,
+          method: "session/set_mode",
+        }),
+      ),
+    );
   });
 }
 
@@ -577,14 +587,14 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
                       decision: resolved,
                     }),
                   );
+                  const selectedOptionId =
+                    resolved === "cancel"
+                      ? undefined
+                      : selectKiroPermissionOptionId(params, resolved);
                   return {
-                    outcome:
-                      resolved === "cancel"
-                        ? ({ outcome: "cancelled" } as const)
-                        : {
-                            outcome: "selected" as const,
-                            optionId: acpPermissionOutcome(resolved),
-                          },
+                    outcome: selectedOptionId
+                      ? { outcome: "selected" as const, optionId: selectedOptionId }
+                      : ({ outcome: "cancelled" } as const),
                   };
                 }),
               ),

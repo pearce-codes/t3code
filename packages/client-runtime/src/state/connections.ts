@@ -97,6 +97,17 @@ export function createEnvironmentCatalogAtoms<R, E>(
         Effect.flatMap((registry) => registry.remove(environmentId)),
       ),
   });
+  const updateProfile = createRuntimeCommand(runtime, {
+    label: "environment-catalog:update-profile",
+    scheduler: commandScheduler,
+    concurrency: serial,
+    execute: (
+      profile: Parameters<EnvironmentRegistry.EnvironmentRegistry["Service"]["updateProfile"]>[0],
+    ) =>
+      EnvironmentRegistry.EnvironmentRegistry.pipe(
+        Effect.flatMap((registry) => registry.updateProfile(profile)),
+      ),
+  });
   const removeRelayEnvironments = createRuntimeCommand(runtime, {
     label: "environment-catalog:remove-relay-environments",
     scheduler: commandScheduler,
@@ -124,6 +135,7 @@ export function createEnvironmentCatalogAtoms<R, E>(
     stateAtom,
     register,
     remove,
+    updateProfile,
     removeRelayEnvironments,
     retryNow,
   };

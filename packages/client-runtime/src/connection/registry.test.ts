@@ -436,6 +436,79 @@ describe("EnvironmentRegistry", () => {
     }),
   );
 
+  it.effect("updates a bearer profile without replacing its saved credential", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        [BEARER_TARGET],
+        [BEARER_PROFILE],
+        [[BEARER_TARGET.connectionId, BEARER_CREDENTIAL]],
+      );
+      const updated = new BearerConnectionProfile({
+        ...BEARER_PROFILE,
+        label: "Renamed bearer environment",
+        httpBaseUrl: "https://new-bearer.example.test",
+        wsBaseUrl: "wss://new-bearer.example.test",
+      });
+
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        yield* registry.updateProfile(updated);
+
+        expect((yield* Ref.get(harness.storedProfiles)).get(updated.connectionId)).toEqual(updated);
+        expect((yield* Ref.get(harness.storedCredentials)).get(updated.connectionId)).toEqual(
+          BEARER_CREDENTIAL,
+        );
+        const entry = (yield* SubscriptionRef.get(registry.entries)).get(updated.environmentId);
+        expect(entry?.target.label).toBe("Renamed bearer environment");
+        expect(Option.getOrThrow(entry?.profile ?? Option.none())).toEqual(updated);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+  );
+
+  it.effect("rejects a bearer edit when its saved credential is missing", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([BEARER_TARGET], [BEARER_PROFILE]);
+
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        const error = yield* registry
+          .updateProfile(
+            new BearerConnectionProfile({
+              ...BEARER_PROFILE,
+              httpBaseUrl: "https://new-bearer.example.test",
+            }),
+          )
+          .pipe(Effect.flip);
+
+        expect(error._tag).toBe("ConnectionCredentialUnavailableError");
+        expect((yield* Ref.get(harness.storedProfiles)).get(BEARER_PROFILE.connectionId)).toEqual(
+          BEARER_PROFILE,
+        );
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+  );
+
+  it.effect("disconnects the previous SSH target when its profile changes", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([SSH_CONNECTION], [SSH_PROFILE]);
+      const updated = new SshConnectionProfile({
+        ...SSH_PROFILE,
+        label: "Renamed SSH environment",
+        target: { ...SSH_TARGET, hostname: "new-ssh.example.test", port: 2222 },
+      });
+
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        yield* registry.updateProfile(updated);
+
+        expect(yield* Ref.get(harness.disconnectedSshTargets)).toEqual([SSH_TARGET]);
+        expect((yield* Ref.get(harness.storedProfiles)).get(updated.connectionId)).toEqual(updated);
+        const entry = (yield* SubscriptionRef.get(registry.entries)).get(updated.environmentId);
+        expect(Option.getOrThrow(entry?.profile ?? Option.none())).toEqual(updated);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+  );
+
   it.effect("publishes network status changes independently of connection state", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness([]);

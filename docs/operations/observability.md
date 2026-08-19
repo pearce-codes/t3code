@@ -318,6 +318,7 @@ Good metric families to watch:
 - `t3_orchestration_command_ack_duration`
 - `t3_provider_turn_duration`
 - `t3_git_command_duration`
+- `t3_thread_snooze_delay_seconds`
 
 Counters tell you volume and failure rate:
 
@@ -352,6 +353,14 @@ That is a server-side acknowledgment metric. It does not measure:
 - React render time
 
 If you need those later, add client-side instrumentation or a dedicated server fanout metric.
+
+### Snooze Delay Distribution
+
+`t3_thread_snooze_delay_seconds` records the requested delay for every accepted
+`thread.snooze` command. It covers preset and custom wake times from every client. The histogram
+buckets span 5 minutes through 30 days and intentionally carry no thread, project, or user labels.
+Use its count, buckets, sum, minimum, and maximum to evaluate whether the default snooze choices
+match actual usage.
 
 ## Common Workflows
 

@@ -27,14 +27,17 @@ import {
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsTitleRegeneration,
+  readEnvironmentSupportsThreadColor,
   readThreadShell,
 } from "../state/entities";
+import { isThreadColorMenuId, threadColorFromMenuId } from "../threadColors";
 import { readLocalApi } from "../localApi";
 import { useUiStateStore } from "../uiStateStore";
 import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useClientSettings } from "./useSettings";
 import { useThreadActions } from "./useThreadActions";
+import { downloadSessionArchive } from "../sessionTransfer";
 
 function failureToast(title: string, error: unknown) {
   toastManager.add(
@@ -119,6 +122,7 @@ export function useThreadActionMenu(input: {
           snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
           pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
           titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
+          colorCoding: readEnvironmentSupportsThreadColor(threadRef.environmentId),
         };
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const snoozePresets = resolveSnoozePresets(now, timestampFormat);
@@ -139,6 +143,7 @@ export function useThreadActionMenu(input: {
           isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
           isRegeneratingTitle,
+          color: thread.color ?? null,
           supports,
           snoozePresets,
         });
@@ -183,6 +188,18 @@ export function useThreadActionMenu(input: {
             failureToast(title, squashAtomCommandFailure(result));
           }
         };
+        if (isThreadColorMenuId(action)) {
+          await reportFailure("Failed to update thread color", () =>
+            updateThreadMetadata({
+              environmentId: threadRef.environmentId,
+              input: {
+                threadId: threadRef.threadId,
+                color: threadColorFromMenuId(action),
+              },
+            }),
+          );
+          return;
+        }
         switch (action) {
           case "new-thread-on-branch": {
             // Explicit branch carry-over: reuse the thread's worktree when it
@@ -229,6 +246,17 @@ export function useThreadActionMenu(input: {
             return;
           case "mark-unread":
             markThreadUnread(scopedThreadKey(threadRef), thread.latestTurn?.completedAt);
+            return;
+          case "export-session":
+            try {
+              await downloadSessionArchive({
+                environmentId: threadRef.environmentId,
+                threadId: threadRef.threadId,
+                title: thread.title,
+              });
+            } catch (error) {
+              failureToast("Failed to export session", error);
+            }
             return;
           case "copy-path": {
             const workspacePath = thread.worktreePath ?? projectCwd;

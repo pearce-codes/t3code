@@ -14,10 +14,13 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import {
+  BearerConnectionRegistration,
   type ConnectionCatalogEntry,
+  type ConnectionProfile,
   type ConnectionRegistration,
   type PlatformConnectionRegistration,
   type PrimaryConnectionRegistration,
+  SshConnectionRegistration,
   SshConnectionProfile,
   connectionRegistrationCatalogEntry,
 } from "./catalog.ts";
@@ -30,6 +33,7 @@ import type {
   NetworkStatus,
   SupervisorConnectionState,
 } from "./model.ts";
+import { BearerConnectionTarget, SshConnectionTarget } from "./model.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionDriver from "./driver.ts";
@@ -59,6 +63,15 @@ export class PlatformEnvironmentRemovalError extends Schema.TaggedErrorClass<Pla
   }
 }
 
+export class ConnectionCredentialUnavailableError extends Schema.TaggedErrorClass<ConnectionCredentialUnavailableError>()(
+  "ConnectionCredentialUnavailableError",
+  { environmentId: EnvironmentId },
+) {
+  override get message(): string {
+    return `The saved credential for environment ${this.environmentId} is unavailable.`;
+  }
+}
+
 export class EnvironmentRegistry extends Context.Service<
   EnvironmentRegistry,
   {
@@ -70,6 +83,16 @@ export class EnvironmentRegistry extends Context.Service<
     readonly register: (
       registration: ConnectionRegistration,
     ) => Effect.Effect<void, Persistence.ConnectionPersistenceError>;
+    readonly updateProfile: (
+      profile: ConnectionProfile,
+    ) => Effect.Effect<
+      void,
+      | Persistence.ConnectionPersistenceError
+      | ConnectionAttemptError
+      | EnvironmentNotRegisteredError
+      | PlatformEnvironmentRemovalError
+      | ConnectionCredentialUnavailableError
+    >;
     readonly registerPlatform: (registration: PrimaryConnectionRegistration) => Effect.Effect<void>;
     readonly reconcilePlatform: (
       registrations: ReadonlyArray<PlatformConnectionRegistration>,
@@ -408,6 +431,75 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  const updateProfile = Effect.fn("EnvironmentRegistry.updateProfile")(function* (
+    profile: ConnectionProfile,
+  ) {
+    yield* withLeaseLock(
+      profile.environmentId,
+      Effect.gen(function* () {
+        if ((yield* Ref.get(platformEnvironmentIds)).has(profile.environmentId)) {
+          return yield* new PlatformEnvironmentRemovalError({
+            environmentId: profile.environmentId,
+          });
+        }
+        const entry = yield* getEntry(profile.environmentId);
+        let registration: ConnectionRegistration;
+
+        if (
+          profile._tag === "BearerConnectionProfile" &&
+          entry.target._tag === "BearerConnectionTarget" &&
+          entry.target.connectionId === profile.connectionId
+        ) {
+          const credential = yield* credentials.get(profile.connectionId);
+          if (Option.isNone(credential)) {
+            return yield* new ConnectionCredentialUnavailableError({
+              environmentId: profile.environmentId,
+            });
+          }
+          registration = new BearerConnectionRegistration({
+            target: new BearerConnectionTarget({
+              environmentId: profile.environmentId,
+              connectionId: profile.connectionId,
+              label: profile.label,
+            }),
+            profile,
+            credential: credential.value,
+          });
+        } else if (
+          profile._tag === "SshConnectionProfile" &&
+          entry.target._tag === "SshConnectionTarget" &&
+          entry.target.connectionId === profile.connectionId
+        ) {
+          registration = new SshConnectionRegistration({
+            target: new SshConnectionTarget({
+              environmentId: profile.environmentId,
+              connectionId: profile.connectionId,
+              label: profile.label,
+            }),
+            profile,
+          });
+        } else {
+          return yield* new EnvironmentNotRegisteredError({ environmentId: profile.environmentId });
+        }
+
+        yield* registrations.register(registration);
+        yield* Ref.update(persistedTargetsByEnvironment, (current) => {
+          const next = new Map(current);
+          next.set(profile.environmentId, registration.target);
+          return next;
+        });
+        if (
+          profile._tag === "SshConnectionProfile" &&
+          Option.isSome(entry.profile) &&
+          entry.profile.value._tag === "SshConnectionProfile"
+        ) {
+          yield* ssh.disconnect(entry.profile.value.target).pipe(Effect.ignore);
+        }
+        yield* installEntryLocked(connectionRegistrationCatalogEntry(registration));
+      }),
+    );
+  });
+
   const installPlatformRegistration = Effect.fn("EnvironmentRegistry.installPlatformRegistration")(
     function* (registration: PlatformConnectionRegistration) {
       const entry = connectionRegistrationCatalogEntry(registration);
@@ -662,6 +754,7 @@ export const make = Effect.gen(function* () {
     networkStatus,
     start,
     register,
+    updateProfile,
     registerPlatform,
     reconcilePlatform,
     remove,

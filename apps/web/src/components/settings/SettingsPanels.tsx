@@ -1,6 +1,6 @@
 import { ArchiveIcon, ArchiveX, ChevronRightIcon, LoaderIcon, SettingsIcon } from "lucide-react";
 import { Link } from "@tanstack/react-router";
-import type { CSSProperties, ReactNode } from "react";
+import type { ChangeEvent, CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -78,6 +78,8 @@ import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { isMacPlatform } from "../../lib/utils";
 import { primaryServerObservabilityAtom, primaryServerProvidersAtom } from "../../state/server";
 import { useProjects } from "../../state/entities";
+import { usePrimaryEnvironmentId } from "../../state/environments";
+import { importSessionArchive } from "../../sessionTransfer";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
@@ -1744,6 +1746,9 @@ function LegacyFeaturesSection() {
 export function GeneralSettingsPanel() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const sessionImportInputRef = useRef<HTMLInputElement>(null);
+  const [isImportingSession, setIsImportingSession] = useState(false);
   const [backgroundActivityDialogOpen, setBackgroundActivityDialogOpen] = useState(false);
   const lastEnabledProjectGroupingMode = useRef<SidebarProjectGroupingMode>(
     readLastEnabledProjectGroupingMode(),
@@ -1794,9 +1799,60 @@ export function GeneralSettingsPanel() {
     DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
   );
 
+  const handleSessionImport = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.currentTarget.files?.[0];
+      event.currentTarget.value = "";
+      if (!file || primaryEnvironmentId === null) return;
+      setIsImportingSession(true);
+      try {
+        await importSessionArchive({ environmentId: primaryEnvironmentId, file });
+        toastManager.add({
+          type: "success",
+          title: "Session imported",
+          description: "The imported conversation is now available in its project.",
+        });
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to import session",
+            description: error instanceof Error ? error.message : "The archive is not valid.",
+          }),
+        );
+      } finally {
+        setIsImportingSession(false);
+      }
+    },
+    [primaryEnvironmentId],
+  );
+
   return (
     <SettingsPageContainer>
       <SettingsSection title="General">
+        <SettingsRow
+          {...searchableSetting("session-transfer")}
+          description="Import a portable Pearce Codes or compatible T3 Code session archive. Export a session from any thread's menu."
+          control={
+            <>
+              <input
+                ref={sessionImportInputRef}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={handleSessionImport}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={primaryEnvironmentId === null || isImportingSession}
+                onClick={() => sessionImportInputRef.current?.click()}
+              >
+                {isImportingSession ? "Importing…" : "Import session"}
+              </Button>
+            </>
+          }
+        />
         <SettingsRow
           {...searchableSetting("project-grouping")}
           description="Combine matching repositories across environments."

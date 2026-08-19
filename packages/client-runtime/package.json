@@ -111,6 +111,10 @@
       "types": "./src/state/session.ts",
       "default": "./src/state/session.ts"
     },
+    "./state/session-transfer": {
+      "types": "./src/state/sessionTransferHttp.ts",
+      "default": "./src/state/sessionTransferHttp.ts"
+    },
     "./state/shell": {
       "types": "./src/state/shell.ts",
       "default": "./src/state/shell.ts"

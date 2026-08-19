@@ -47,6 +47,7 @@ import {
   type ScopedThreadRef,
   type ResolvedKeybindingsConfig,
   type SidebarProjectGroupingMode,
+  type ThreadColor,
   ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -78,6 +79,7 @@ import { isTerminalFocused } from "../lib/terminalFocus";
 import { isMacPlatform } from "../lib/utils";
 import {
   readThreadShell,
+  readEnvironmentSupportsThreadColor,
   useProject,
   useProjects,
   useThreadShells,
@@ -108,6 +110,12 @@ import { ensureLocalApi, readLocalApi } from "../localApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useDesktopUpdateState } from "../state/desktopUpdate";
+import { downloadSessionArchive } from "../sessionTransfer";
+import {
+  buildThreadColorMenuItem,
+  isThreadColorMenuId,
+  threadColorFromMenuId,
+} from "../threadColors";
 
 import { useThreadActions } from "../hooks/useThreadActions";
 import { projectEnvironment } from "../state/projects";
@@ -190,6 +198,7 @@ import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrom
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { CommandDialogTrigger } from "./ui/command";
+import { ThreadColorBar } from "./ThreadColorBar";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import {
@@ -387,6 +396,30 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   const openPreview = useAtomCommand(previewEnvironment.open, {
     reportFailure: false,
   });
+  const updateThreadColor = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
+  const handleColorChange = useCallback(
+    (color: ThreadColor | null) => {
+      void (async () => {
+        const result = await updateThreadColor({
+          environmentId: thread.environmentId,
+          input: { threadId: thread.id, color },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to update thread color",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      })();
+    },
+    [thread.environmentId, thread.id, updateThreadColor],
+  );
   const environment = useEnvironment(thread.environmentId);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const isRemoteThread =
@@ -684,12 +717,15 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
         className={`${resolveThreadRowClassName({
           isActive,
           isSelected,
-        })} relative isolate`}
+        })} group/sidebar-row relative isolate`}
         onClick={handleRowClick}
         onDoubleClick={handleRowDoubleClick}
         onKeyDown={handleRowKeyDown}
         onContextMenu={handleRowContextMenu}
       >
+        {thread.color != null ? (
+          <ThreadColorBar color={thread.color} onChange={handleColorChange} />
+        ) : null}
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
           {prStatus && (
             <Tooltip>
@@ -2137,6 +2173,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       );
       const threadWorkspacePath =
         thread.worktreePath ?? threadProject?.workspaceRoot ?? project.workspaceRoot ?? null;
+      const supportsColor = readEnvironmentSupportsThreadColor(thread.environmentId);
       const clicked = await api.contextMenu.show(
         [
           ...(thread.branch
@@ -2144,12 +2181,32 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             : []),
           { id: "rename", label: "Rename thread" },
           { id: "mark-unread", label: "Mark unread" },
+          { id: "export-session", label: "Export session" },
+          ...(supportsColor ? [buildThreadColorMenuItem(thread.color ?? null)] : []),
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
           { id: "delete", label: "Delete", destructive: true, icon: "trash" },
         ],
         position,
       );
+
+      if (clicked !== null && isThreadColorMenuId(clicked)) {
+        const result = await updateThreadMetadata({
+          environmentId: threadRef.environmentId,
+          input: { threadId: threadRef.threadId, color: threadColorFromMenuId(clicked) },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to update thread color",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+        return;
+      }
 
       if (clicked === "new-thread-on-branch") {
         // Explicit branch carry-over: reuse the thread's worktree when it
@@ -2182,6 +2239,24 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
       if (clicked === "mark-unread") {
         markThreadUnread(threadKey, thread.latestTurn?.completedAt);
+        return;
+      }
+      if (clicked === "export-session") {
+        try {
+          await downloadSessionArchive({
+            environmentId: threadRef.environmentId,
+            threadId: threadRef.threadId,
+            title: thread.title,
+          });
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to export session",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
         return;
       }
       if (clicked === "copy-path") {

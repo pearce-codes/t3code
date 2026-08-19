@@ -63,6 +63,11 @@ export interface AcpPatchedProtocol {
   readonly serverProtocol: RpcServer.Protocol["Service"];
   readonly incoming: Stream.Stream<AcpIncomingNotification>;
   readonly request: (method: string, payload: unknown) => Effect.Effect<unknown, AcpError.AcpError>;
+  /** Sends a JSON-RPC request without waiting for a response. */
+  readonly requestNoWait: (
+    method: string,
+    payload: unknown,
+  ) => Effect.Effect<void, AcpError.AcpError>;
   readonly notify: (method: string, payload: unknown) => Effect.Effect<void, AcpError.AcpError>;
 }
 
@@ -89,6 +94,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
   const nextRequestId = yield* Ref.make(1);
   const terminationHandled = yield* Ref.make(false);
   const extPending = yield* Ref.make(new Map<string, AcpPendingRequest>());
+  const ignoredResponseIds = yield* Ref.make(new Set<string>());
 
   const logProtocol = (event: AcpProtocolLogEvent) => {
     if (event.direction === "incoming" && !options.logIncoming) {
@@ -340,35 +346,49 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
   };
 
   const handleExitEncoded = (message: RpcMessage.ResponseExitEncoded) =>
-    Ref.get(extPending).pipe(
-      Effect.flatMap((pending) => {
-        const pendingRequest = pending.get(String(message.requestId));
-        if (!pendingRequest) {
-          return Queue.offer(clientQueue, message).pipe(Effect.asVoid);
-        }
-        if (message.exit._tag === "Success") {
-          return completeExtPendingSuccess(message.requestId, message.exit.value);
-        }
-        const failure = message.exit.cause.find((entry) => entry._tag === "Fail");
-        if (failure && isProtocolError(failure.error)) {
-          return completeExtPendingFailure(
-            message.requestId,
-            AcpError.AcpRequestError.fromProtocolError(failure.error, {
-              method: pendingRequest.method,
-              requestId: message.requestId,
-              cause: message.exit.cause,
-            }),
-          );
-        }
-        return completeExtPendingFailure(
-          message.requestId,
-          AcpError.AcpRequestError.fromExtensionResponseFailure(
-            pendingRequest.method,
-            message.requestId,
-            message.exit.cause,
-          ),
-        );
-      }),
+    Ref.modify(ignoredResponseIds, (ids) => {
+      const requestId = String(message.requestId);
+      if (!ids.has(requestId)) {
+        return [false, ids] as const;
+      }
+      const next = new Set(ids);
+      next.delete(requestId);
+      return [true, next] as const;
+    }).pipe(
+      Effect.flatMap((ignoreResponse) =>
+        ignoreResponse
+          ? Effect.void
+          : Ref.get(extPending).pipe(
+              Effect.flatMap((pending) => {
+                const pendingRequest = pending.get(String(message.requestId));
+                if (!pendingRequest) {
+                  return Queue.offer(clientQueue, message).pipe(Effect.asVoid);
+                }
+                if (message.exit._tag === "Success") {
+                  return completeExtPendingSuccess(message.requestId, message.exit.value);
+                }
+                const failure = message.exit.cause.find((entry) => entry._tag === "Fail");
+                if (failure && isProtocolError(failure.error)) {
+                  return completeExtPendingFailure(
+                    message.requestId,
+                    AcpError.AcpRequestError.fromProtocolError(failure.error, {
+                      method: pendingRequest.method,
+                      requestId: message.requestId,
+                      cause: message.exit.cause,
+                    }),
+                  );
+                }
+                return completeExtPendingFailure(
+                  message.requestId,
+                  AcpError.AcpRequestError.fromExtensionResponseFailure(
+                    pendingRequest.method,
+                    message.requestId,
+                    message.exit.cause,
+                  ),
+                );
+              }),
+            ),
+      ),
     );
 
   const routeDecodedMessage = (
@@ -549,6 +569,32 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     );
   });
 
+  const sendRequestNoWait = Effect.fn("sendRequestNoWait")(function* (
+    method: string,
+    payload: unknown,
+  ) {
+    const requestId = yield* Ref.modify(
+      nextRequestId,
+      (current) => [current, current + 1] as const,
+    );
+    yield* Ref.update(ignoredResponseIds, (ids) => new Set(ids).add(String(requestId)));
+    yield* offerOutgoing({
+      _tag: "Request",
+      id: requestId,
+      tag: method,
+      payload,
+      headers: [],
+    }).pipe(
+      Effect.tapError(() =>
+        Ref.update(ignoredResponseIds, (ids) => {
+          const next = new Set(ids);
+          next.delete(String(requestId));
+          return next;
+        }),
+      ),
+    );
+  });
+
   return {
     clientProtocol,
     serverProtocol,
@@ -556,6 +602,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       return Stream.fromQueue(notificationQueue);
     },
     request: sendRequest,
+    requestNoWait: sendRequestNoWait,
     notify: sendNotification,
   } satisfies AcpPatchedProtocol;
 });

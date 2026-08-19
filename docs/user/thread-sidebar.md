@@ -12,6 +12,13 @@ If reordering is unavailable for one environment, update the T3 Code server runn
 environment. Older servers can still pin and unpin threads, but do not understand synced ordering;
 their pinned threads keep the default newest-first order below the ones you have arranged.
 
+## Color coding
+
+On web and desktop, right-click a thread and choose **Color** to add a color marker. The marker
+appears as a thin bar along the thread's left edge and widens when you hover the row. Click the bar
+to change or clear the color. Thread colors are stored by the server and stay in sync across
+connected web and desktop clients.
+
 ## Environment artwork
 
 Dev and Nightly environments can identify themselves with artwork at the top of the sidebar and in

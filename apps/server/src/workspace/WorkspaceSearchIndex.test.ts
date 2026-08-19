@@ -17,6 +17,22 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("uses the portable search backend on Amazon Linux 2's glibc baseline", () => {
+  expect(
+    WorkspaceSearchIndex.supportsNativeWorkspaceSearch({
+      platform: "linux",
+      glibcVersion: "2.26",
+    }),
+  ).toBe(false);
+  expect(
+    WorkspaceSearchIndex.supportsNativeWorkspaceSearch({
+      platform: "linux",
+      glibcVersion: "2.30",
+    }),
+  ).toBe(true);
+  expect(WorkspaceSearchIndex.supportsNativeWorkspaceSearch({ platform: "darwin" })).toBe(true);
+});
+
 function fileItem(relativePath: string): FileItem {
   return {
     relativePath,

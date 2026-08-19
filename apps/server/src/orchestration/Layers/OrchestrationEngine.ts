@@ -27,6 +27,7 @@ import {
   orchestrationCommandAckDuration,
   orchestrationCommandsTotal,
   orchestrationCommandDuration,
+  threadSnoozeDelaySeconds,
 } from "../../observability/Metrics.ts";
 import { toPersistenceSqlError } from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
@@ -215,6 +216,13 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         commandReadModel = committedCommand.nextCommandReadModel;
         for (const [index, event] of committedCommand.committedEvents.entries()) {
           yield* PubSub.publish(eventPubSub, event);
+          if (event.type === "thread.snoozed") {
+            const delaySeconds =
+              (Date.parse(event.payload.snoozedUntil) - Date.parse(event.occurredAt)) / 1_000;
+            if (Number.isFinite(delaySeconds) && delaySeconds > 0) {
+              yield* Metric.update(threadSnoozeDelaySeconds, delaySeconds);
+            }
+          }
           if (index === 0) {
             yield* Metric.update(
               Metric.withAttributes(

@@ -10,6 +10,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -17,7 +18,7 @@ import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as EffectAcpClient from "effect-acp/client";
 import * as EffectAcpErrors from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import * as EffectAcpSchema from "effect-acp/schema";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
@@ -49,6 +50,10 @@ export type AcpSessionRuntimeEvent = AcpParsedSessionEvent | AcpSessionEventStre
 
 const defaultSessionLoadTimeout = Duration.seconds(90);
 const defaultSessionLoadReplayIdleGap = Duration.seconds(2);
+const initializeResponseWithLegacyVersion = Schema.Struct({
+  ...EffectAcpSchema.InitializeResponse.fields,
+  protocolVersion: Schema.Union([Schema.Number, Schema.String]),
+});
 
 export interface AcpSpawnInput {
   readonly command: string;
@@ -64,6 +69,8 @@ export interface AcpSessionRuntimeOptions {
   readonly sessionLoadTimeout?: Duration.Input;
   readonly sessionLoadReplayIdleGap?: Duration.Input;
   readonly clientCapabilities?: EffectAcpSchema.InitializeRequest["clientCapabilities"];
+  /** ACP protocol identifier. Kiro still uses the date-based pre-1.0 identifier. */
+  readonly protocolVersion?: number | string;
   readonly clientInfo: {
     readonly name: string;
     readonly version: string;
@@ -205,6 +212,10 @@ export class AcpSessionRuntime extends Context.Service<
      * @see https://agentclientprotocol.com/protocol/schema#session/set_config_option
      */
     readonly setMode: (
+      modeId: string,
+    ) => Effect.Effect<EffectAcpSchema.SetSessionModeResponse, EffectAcpErrors.AcpError>;
+    /** Selects the active mode through the legacy ACP `session/set_mode` request. */
+    readonly setSessionMode: (
       modeId: string,
     ) => Effect.Effect<EffectAcpSchema.SetSessionModeResponse, EffectAcpErrors.AcpError>;
     /**
@@ -530,15 +541,29 @@ export const make = (
 
     const startOnce = Effect.gen(function* () {
       const initializePayload = {
-        protocolVersion: 1,
+        protocolVersion: options.protocolVersion ?? 1,
         clientCapabilities: initializeClientCapabilities,
         clientInfo: options.clientInfo,
-      } satisfies EffectAcpSchema.InitializeRequest;
+      };
 
       const initializeResult = yield* runLoggedRequest(
         "initialize",
         initializePayload,
-        acp.agent.initialize(initializePayload),
+        typeof initializePayload.protocolVersion === "number"
+          ? acp.agent.initialize(initializePayload as EffectAcpSchema.InitializeRequest)
+          : acp.raw.request("initialize", initializePayload).pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(initializeResponseWithLegacyVersion)),
+              Effect.map((response) => ({ ...response, protocolVersion: 1 })),
+              Effect.mapError(
+                (cause) =>
+                  new EffectAcpErrors.AcpTransportError({
+                    operation: "call-rpc",
+                    method: "initialize",
+                    detail: "Failed to decode the legacy ACP initialize response.",
+                    cause,
+                  }),
+              ),
+            ),
       );
 
       if (
@@ -785,6 +810,30 @@ export const make = (
             return setConfigOption("mode", modeId).pipe(
               Effect.tap(() => updateCurrentModeId(modeId)),
               Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
+            );
+          }),
+        ),
+      setSessionMode: (modeId) =>
+        Ref.get(modeStateRef).pipe(
+          Effect.flatMap((modeState) => {
+            if (modeState?.currentModeId === modeId) {
+              return Effect.succeed({} satisfies EffectAcpSchema.SetSessionModeResponse);
+            }
+            return getStartedState.pipe(
+              Effect.flatMap((started) => {
+                const requestPayload = {
+                  sessionId: started.sessionId,
+                  modeId,
+                } satisfies EffectAcpSchema.SetSessionModeRequest;
+                return runLoggedRequest(
+                  "session/set_mode",
+                  requestPayload,
+                  acp.raw
+                    .requestNoWait("session/set_mode", requestPayload)
+                    .pipe(Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse)),
+                );
+              }),
+              Effect.tap(() => updateCurrentModeId(modeId)),
             );
           }),
         ),

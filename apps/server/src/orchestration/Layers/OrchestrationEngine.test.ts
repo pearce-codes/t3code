@@ -10,6 +10,8 @@ import {
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
@@ -90,6 +92,12 @@ const hasMetricSnapshot = (
     (snapshot) =>
       snapshot.id === id &&
       Object.entries(attributes).every(([key, value]) => snapshot.attributes?.[key] === value),
+  );
+
+const findHistogramSnapshot = (snapshots: ReadonlyArray<Metric.Metric.Snapshot>, id: string) =>
+  snapshots.find(
+    (snapshot): snapshot is Extract<Metric.Metric.Snapshot, { readonly type: "Histogram" }> =>
+      snapshot.type === "Histogram" && snapshot.id === id,
   );
 
 describe("OrchestrationEngine", () => {
@@ -667,6 +675,150 @@ describe("OrchestrationEngine", () => {
         ackEventType: "thread.created",
       }),
     ).toBe(true);
+
+    await system.dispose();
+  });
+
+  it("records the requested delay for every accepted snooze", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const projectId = asProjectId("project-snooze-metric");
+    const threadId = ThreadId.make("thread-snooze-metric");
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-snooze-metric-create"),
+        projectId,
+        title: "Snooze Metric Project",
+        workspaceRoot: "/tmp/project-snooze-metric",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt: now(),
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-snooze-metric-create"),
+        threadId,
+        projectId,
+        title: "Snooze Metric Thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt: now(),
+      }),
+    );
+
+    const before = findHistogramSnapshot(
+      await system.run(Metric.snapshot),
+      "t3_thread_snooze_delay_seconds",
+    );
+    const beforeCount = before?.state.count ?? 0;
+    const beforeSum = before?.state.sum ?? 0;
+    const firstWake = DateTime.formatIso(
+      DateTime.makeUnsafe((await system.run(Clock.currentTimeMillis)) + 45 * 60 * 1_000),
+    );
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.snooze",
+        commandId: CommandId.make("cmd-thread-snooze-metric-first"),
+        threadId,
+        snoozedUntil: firstWake,
+      }),
+    );
+
+    const afterFirstModel = await system.readModel();
+    const firstSnoozedAt = afterFirstModel.threads.find(
+      (thread) => thread.id === threadId,
+    )?.snoozedAt;
+    expect(firstSnoozedAt).not.toBeNull();
+    expect(firstSnoozedAt).not.toBeUndefined();
+    const expectedFirstDelay =
+      (Date.parse(firstWake) - Date.parse(firstSnoozedAt ?? "invalid")) / 1_000;
+    const afterFirst = findHistogramSnapshot(
+      await system.run(Metric.snapshot),
+      "t3_thread_snooze_delay_seconds",
+    );
+    expect(afterFirst?.state.count).toBe(beforeCount + 1);
+    expect((afterFirst?.state.sum ?? 0) - beforeSum).toBe(expectedFirstDelay);
+
+    const secondWake = DateTime.formatIso(
+      DateTime.makeUnsafe((await system.run(Clock.currentTimeMillis)) + 2 * 60 * 60 * 1_000),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.snooze",
+        commandId: CommandId.make("cmd-thread-snooze-metric-second"),
+        threadId,
+        snoozedUntil: secondWake,
+      }),
+    );
+
+    const afterSecondModel = await system.readModel();
+    const secondSnoozedAt = afterSecondModel.threads.find(
+      (thread) => thread.id === threadId,
+    )?.snoozedAt;
+    expect(secondSnoozedAt).not.toBeNull();
+    expect(secondSnoozedAt).not.toBeUndefined();
+    const expectedSecondDelay =
+      (Date.parse(secondWake) - Date.parse(secondSnoozedAt ?? "invalid")) / 1_000;
+    const afterSecond = findHistogramSnapshot(
+      await system.run(Metric.snapshot),
+      "t3_thread_snooze_delay_seconds",
+    );
+    expect(afterSecond?.state.count).toBe(beforeCount + 2);
+    expect((afterSecond?.state.sum ?? 0) - beforeSum).toBe(
+      expectedFirstDelay + expectedSecondDelay,
+    );
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.snooze",
+        commandId: CommandId.make("cmd-thread-snooze-metric-second"),
+        threadId,
+        snoozedUntil: secondWake,
+      }),
+    );
+    const afterIdempotentRetry = findHistogramSnapshot(
+      await system.run(Metric.snapshot),
+      "t3_thread_snooze_delay_seconds",
+    );
+    expect(afterIdempotentRetry?.state.count).toBe(beforeCount + 2);
+    expect((afterIdempotentRetry?.state.sum ?? 0) - beforeSum).toBe(
+      expectedFirstDelay + expectedSecondDelay,
+    );
+
+    const pastWake = DateTime.formatIso(
+      DateTime.makeUnsafe((await system.run(Clock.currentTimeMillis)) - 60 * 60 * 1_000),
+    );
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.snooze",
+          commandId: CommandId.make("cmd-thread-snooze-metric-rejected"),
+          threadId,
+          snoozedUntil: pastWake,
+        }),
+      ),
+    ).rejects.toThrow("is not in the future");
+    const afterRejected = findHistogramSnapshot(
+      await system.run(Metric.snapshot),
+      "t3_thread_snooze_delay_seconds",
+    );
+    expect(afterRejected?.state.count).toBe(beforeCount + 2);
+    expect((afterRejected?.state.sum ?? 0) - beforeSum).toBe(
+      expectedFirstDelay + expectedSecondDelay,
+    );
 
     await system.dispose();
   });

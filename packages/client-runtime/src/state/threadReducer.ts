@@ -218,6 +218,7 @@ export function applyThreadDetailEvent(
           ...(event.payload.worktreePath !== undefined
             ? { worktreePath: event.payload.worktreePath }
             : {}),
+          ...(event.payload.color !== undefined ? { color: event.payload.color } : {}),
           updatedAt: event.payload.updatedAt,
         },
       };

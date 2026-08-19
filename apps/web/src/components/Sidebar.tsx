@@ -30,7 +30,7 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import type { ScopedThreadRef, ThreadColor, ThreadId } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
@@ -109,6 +109,8 @@ import { useProjects, useThreadShells } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
+import { downloadSessionArchive } from "../sessionTransfer";
+import { isThreadColorMenuId, threadColorFromMenuId } from "../threadColors";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 import {
@@ -150,9 +152,14 @@ import {
   type TerminalStatusIndicator,
 } from "./ThreadStatusIndicators";
 import {
+  defaultSnoozeUntilInput,
+  formatSnoozeUntilInput,
+  resolveCustomSnoozeFor,
+  resolveCustomSnoozeUntil,
   resolveSnoozePresets,
   snoozeWakeDescription,
   snoozeWakeLabel,
+  type CustomSnoozeDurationUnit,
   type SnoozePreset,
 } from "./Sidebar.snooze";
 import { ProjectFavicon } from "./ProjectFavicon";
@@ -169,6 +176,7 @@ import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./u
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
+import { ThreadColorBar } from "./ThreadColorBar";
 import {
   composerDraftHasUserContent,
   DraftId,
@@ -347,7 +355,7 @@ function SidebarThreadTooltip({
 }
 
 /**
- * Hover entry point for snooze: a clock button opening the preset menu.
+ * Hover entry point for snooze: a clock button opening the duration menu.
  * Controlled by the row (which also uses the open state to pin its hover
  * actions while the menu is up).
  */
@@ -358,14 +366,57 @@ function SnoozePopoverButton(props: {
   timestampFormat: TimestampFormat;
 }) {
   const { open, onOpenChange, onSnooze, timestampFormat } = props;
-  // Presets resolve at open time so "In 1 hour" is relative to the click,
+  const [customMode, setCustomMode] = useState<"for" | "until" | null>(null);
+  const [durationAmount, setDurationAmount] = useState("1");
+  const [durationUnit, setDurationUnit] = useState<CustomSnoozeDurationUnit>("hours");
+  const [untilValue, setUntilValue] = useState(() => defaultSnoozeUntilInput(new Date()));
+  // Presets resolve at open time so "1 hour" is relative to the click,
   // not to when the row mounted.
   const presets = useMemo(
     () => (open ? resolveSnoozePresets(new Date(), timestampFormat) : []),
     [open, timestampFormat],
   );
+  const customSnoozedUntil =
+    customMode === "for"
+      ? resolveCustomSnoozeFor(new Date(), durationAmount, durationUnit)
+      : customMode === "until"
+        ? resolveCustomSnoozeUntil(untilValue, new Date())
+        : null;
+  const handleOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (!nextOpen) setCustomMode(null);
+      onOpenChange(nextOpen);
+    },
+    [onOpenChange],
+  );
+  const chooseCustomMode = useCallback((mode: "for" | "until") => {
+    if (mode === "for") {
+      setDurationAmount("1");
+      setDurationUnit("hours");
+    } else {
+      setUntilValue(defaultSnoozeUntilInput(new Date()));
+    }
+    setCustomMode(mode);
+  }, []);
+  const submitCustomSnooze = useCallback(() => {
+    const submittedAt = new Date();
+    const snoozedUntil =
+      customMode === "for"
+        ? resolveCustomSnoozeFor(submittedAt, durationAmount, durationUnit)
+        : customMode === "until"
+          ? resolveCustomSnoozeUntil(untilValue, submittedAt)
+          : null;
+    if (snoozedUntil === null) return;
+    handleOpenChange(false);
+    onSnooze({
+      id: "custom",
+      label: "Custom",
+      whenLabel: "",
+      snoozedUntil,
+    });
+  }, [customMode, durationAmount, durationUnit, handleOpenChange, onSnooze, untilValue]);
   return (
-    <Popover open={open} onOpenChange={onOpenChange}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <Tooltip>
         <TooltipTrigger
           render={
@@ -373,7 +424,7 @@ function SnoozePopoverButton(props: {
               render={
                 <button
                   type="button"
-                  aria-label="Snooze thread"
+                  aria-label="Choose how long to snooze thread"
                   onClick={(event) => event.stopPropagation()}
                   onDoubleClick={(event) => event.stopPropagation()}
                   className="inline-flex h-full cursor-pointer items-center gap-0.5 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
@@ -384,26 +435,101 @@ function SnoozePopoverButton(props: {
         >
           <ClockIcon className="size-3" />
         </TooltipTrigger>
-        <TooltipPopup>Snooze thread</TooltipPopup>
+        <TooltipPopup>Snooze for…</TooltipPopup>
       </Tooltip>
-      <PopoverPopup side="bottom" align="end" className="w-56" viewportClassName="p-1">
-        {presets.map((preset) => (
-          <button
-            key={preset.id}
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpenChange(false);
-              onSnooze(preset);
+      <PopoverPopup side="bottom" align="end" className="w-64" viewportClassName="p-1">
+        {customMode === null ? (
+          <>
+            {presets.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleOpenChange(false);
+                  onSnooze(preset);
+                }}
+                className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground/90 hover:bg-accent hover:text-foreground"
+              >
+                <span className="flex-1">{preset.label}</span>
+                <span className="font-mono text-[10px] text-muted-foreground/60 tabular-nums">
+                  {preset.whenLabel}
+                </span>
+              </button>
+            ))}
+            <div className="mt-1 grid grid-cols-2 gap-1 border-t border-border/60 pt-1">
+              <Button size="compact" variant="ghost" onClick={() => chooseCustomMode("for")}>
+                For
+              </Button>
+              <Button size="compact" variant="ghost" onClick={() => chooseCustomMode("until")}>
+                Until
+              </Button>
+            </div>
+          </>
+        ) : (
+          <form
+            className="space-y-2 p-1"
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitCustomSnooze();
             }}
-            className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground/90 hover:bg-accent hover:text-foreground"
           >
-            <span className="flex-1">{preset.label}</span>
-            <span className="font-mono text-[10px] text-muted-foreground/60 tabular-nums">
-              {preset.whenLabel}
-            </span>
-          </button>
-        ))}
+            <div className="flex items-center justify-between px-1">
+              <button
+                type="button"
+                className="text-xs text-muted-foreground hover:text-foreground"
+                onClick={() => setCustomMode(null)}
+              >
+                Back
+              </button>
+              <span className="text-xs font-medium text-foreground">
+                Snooze {customMode === "for" ? "for" : "until"}
+              </span>
+            </div>
+            {customMode === "for" ? (
+              <div className="grid grid-cols-[1fr_auto] gap-1">
+                <Input
+                  nativeInput
+                  size="compact"
+                  type="number"
+                  min="1"
+                  step="1"
+                  aria-label="Custom snooze duration"
+                  value={durationAmount}
+                  onChange={(event) => setDurationAmount(event.target.value)}
+                  autoFocus
+                />
+                <select
+                  aria-label="Snooze duration unit"
+                  value={durationUnit}
+                  onChange={(event) =>
+                    setDurationUnit(event.target.value as CustomSnoozeDurationUnit)
+                  }
+                  className="h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value="minutes">minutes</option>
+                  <option value="hours">hours</option>
+                  <option value="days">days</option>
+                </select>
+              </div>
+            ) : (
+              <Input
+                nativeInput
+                size="compact"
+                type="datetime-local"
+                min={formatSnoozeUntilInput(new Date())}
+                aria-label="Snooze until date and time"
+                value={untilValue}
+                onChange={(event) => setUntilValue(event.target.value)}
+                autoFocus
+              />
+            )}
+            <Button className="w-full" size="compact" type="submit" disabled={!customSnoozedUntil}>
+              Snooze
+            </Button>
+          </form>
+        )}
       </PopoverPopup>
     </Popover>
   );
@@ -676,6 +802,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // the pinning capability is confirmed, and stays a passive marker while
   // the descriptor is not loaded. Pinning itself lives in the context menu.
   pinningSupported: boolean;
+  colorCodingSupported: boolean;
   isPinned: boolean;
   // Present only on pinned cards whose server supports reordering: dnd-kit
   // sortable bag applied to the card root so the whole card drags (the
@@ -710,6 +837,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   onSnooze: (threadRef: ScopedThreadRef, preset: SnoozePreset) => void;
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
   onUnpin: (threadRef: ScopedThreadRef) => void;
+  onSetColor: (threadRef: ScopedThreadRef, color: ThreadColor | null) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
   onChangeRequestState: (threadKey: string, state: "open" | "closed" | "merged" | null) => void;
 }) {
@@ -729,6 +857,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     onUnsettle,
     onUnsnooze,
     onUnpin,
+    onSetColor,
     openPullRequestsInRightPanel,
     renamingTitle,
     thread,
@@ -1150,6 +1279,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               />
             }
           >
+            {props.colorCodingSupported && thread.color != null ? (
+              <ThreadColorBar
+                color={thread.color}
+                onChange={(color) => onSetColor(threadRef, color)}
+              />
+            ) : null}
             {/* Settled history recedes: dimmed favicon at rest, restored on
               hover so the tail stays scannable when you're hunting. */}
             <span
@@ -1297,6 +1432,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             />
           }
         >
+          {props.colorCodingSupported && thread.color != null ? (
+            <ThreadColorBar
+              color={thread.color}
+              onChange={(color) => onSetColor(threadRef, color)}
+            />
+          ) : null}
           <div className="relative z-10 h-[4.875rem] px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">
             <div className="flex h-5 min-w-0 items-center gap-1.5">
               <ProjectFavicon
@@ -2339,6 +2480,28 @@ export default function Sidebar() {
     [updateThreadMetadata],
   );
 
+  const setThreadColor = useCallback(
+    (threadRef: ScopedThreadRef, color: ThreadColor | null) => {
+      void (async () => {
+        const result = await updateThreadMetadata({
+          environmentId: threadRef.environmentId,
+          input: { threadId: threadRef.threadId, color },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to update thread color",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      })();
+    },
+    [updateThreadMetadata],
+  );
+
   const handleThreadClick = useCallback(
     (event: ReactMouseEvent, threadRef: ScopedThreadRef) => {
       if (isSidebarNestedLinkClick(event.target)) return;
@@ -2766,7 +2929,7 @@ export default function Sidebar() {
               ? [
                   {
                     id: "snooze",
-                    label: `Snooze (${count})`,
+                    label: `Snooze ${count} for…`,
                     children: snoozePresets.map((preset) => ({
                       id: `snooze:${preset.id}`,
                       label: `${preset.label} (${preset.whenLabel})`,
@@ -2975,6 +3138,8 @@ export default function Sidebar() {
         const supportsTitleRegeneration =
           serverConfigs.get(thread.environmentId)?.environment.capabilities
             .threadTitleRegeneration === true;
+        const supportsColor =
+          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadColor === true;
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
@@ -2990,11 +3155,13 @@ export default function Sidebar() {
               isSnoozed,
               canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
               isRegeneratingTitle,
+              color: thread.color ?? null,
               supports: {
                 settlement: supportsSettlement,
                 snooze: supportsSnooze,
                 pinning: supportsPinning,
                 titleRegeneration: supportsTitleRegeneration,
+                colorCoding: supportsColor,
               },
               snoozePresets,
             }),
@@ -3007,6 +3174,10 @@ export default function Sidebar() {
             (candidate) => `snooze:${candidate.id}` === clicked.value,
           );
           if (preset) attemptSnooze(threadRef, preset);
+          return;
+        }
+        if (clicked.value !== null && isThreadColorMenuId(clicked.value)) {
+          setThreadColor(threadRef, threadColorFromMenuId(clicked.value));
           return;
         }
         switch (clicked.value) {
@@ -3071,6 +3242,23 @@ export default function Sidebar() {
           }
           case "mark-unread":
             markThreadUnread(threadKey, thread.latestTurn?.completedAt);
+            return;
+          case "export-session":
+            try {
+              await downloadSessionArchive({
+                environmentId: threadRef.environmentId,
+                threadId: threadRef.threadId,
+                title: thread.title,
+              });
+            } catch (error) {
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Failed to export session",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
             return;
           case "copy-path":
             if (!threadWorkspacePath) {
@@ -3141,6 +3329,7 @@ export default function Sidebar() {
       markThreadUnread,
       projectCwdByKey,
       serverConfigs,
+      setThreadColor,
       startThreadRename,
       updateThreadMetadata,
       timestampFormat,
@@ -3570,6 +3759,10 @@ export default function Sidebar() {
                           serverConfigs.get(thread.environmentId)?.environment.capabilities
                             .threadPinning === true
                         }
+                        colorCodingSupported={
+                          serverConfigs.get(thread.environmentId)?.environment.capabilities
+                            .threadColor === true
+                        }
                         isPinned={section === "pinned"}
                         sortable={sortable}
                         snoozeWakeLabelText={
@@ -3618,6 +3811,7 @@ export default function Sidebar() {
                         onSnooze={attemptSnooze}
                         onUnsnooze={attemptUnsnooze}
                         onUnpin={attemptUnpin}
+                        onSetColor={setThreadColor}
                         onAcknowledgeWoke={acknowledgeWoke}
                         onChangeRequestState={handleChangeRequestState}
                       />
