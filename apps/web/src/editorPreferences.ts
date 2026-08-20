@@ -1,4 +1,4 @@
-import { EDITORS, EditorId, EnvironmentId } from "@t3tools/contracts";
+import { buildRemoteOpenUrl, EDITORS, EditorId, EnvironmentId } from "@t3tools/contracts";
 import {
   mapAtomCommandResult,
   type AtomCommandFailure,
@@ -11,6 +11,8 @@ import { getLocalStorageItem, setLocalStorageItem, useLocalStorage } from "./hoo
 import { useCallback, useMemo } from "react";
 import { shellEnvironment } from "./state/shell";
 import { useAtomCommand } from "./state/use-atom-command";
+import { openRemoteEditorUrl, useRemoteCapableEditors, useRemoteOpenState } from "./remoteOpen";
+import { splitPathAndPosition } from "./terminal-links";
 
 const LAST_EDITOR_KEY = "t3code:last-editor";
 
@@ -35,6 +37,31 @@ export class PreferredEditorUnavailableError extends Schema.TaggedErrorClass<Pre
 ) {
   override get message(): string {
     return `No available editor can open ${this.targetPath} in environment ${this.environmentId}.`;
+  }
+}
+
+export class PreferredEditorRemoteOpenUnavailableError extends Schema.TaggedErrorClass<PreferredEditorRemoteOpenUnavailableError>()(
+  "PreferredEditorRemoteOpenUnavailableError",
+  {
+    environmentId: EnvironmentId,
+    targetPath: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Cannot open ${this.targetPath} because this client has no SSH route to environment ${this.environmentId}.`;
+  }
+}
+
+export class PreferredEditorRemoteOpenFailedError extends Schema.TaggedErrorClass<PreferredEditorRemoteOpenFailedError>()(
+  "PreferredEditorRemoteOpenFailedError",
+  {
+    environmentId: EnvironmentId,
+    targetPath: Schema.String,
+    editor: EditorId,
+  },
+) {
+  override get message(): string {
+    return `Failed to open ${this.targetPath} on environment ${this.environmentId} in ${this.editor}.`;
   }
 }
 
@@ -67,6 +94,8 @@ export function useOpenInPreferredEditor(
   const openInEditor = useAtomCommand(shellEnvironment.openInEditor, {
     reportFailure: false,
   });
+  const remote = useRemoteOpenState(environmentId);
+  const remoteCapableEditors = useRemoteCapableEditors();
   type OpenInEditorError = AtomCommandFailure<Awaited<ReturnType<typeof openInEditor>>>;
 
   return useCallback(
@@ -78,6 +107,8 @@ export function useOpenInPreferredEditor(
         | OpenInEditorError
         | PreferredEditorEnvironmentRequiredError
         | PreferredEditorUnavailableError
+        | PreferredEditorRemoteOpenUnavailableError
+        | PreferredEditorRemoteOpenFailedError
       >
     > => {
       if (environmentId === null) {
@@ -89,17 +120,53 @@ export function useOpenInPreferredEditor(
           ),
         );
       }
-      const editor = resolveAndPersistPreferredEditor(availableEditors);
+      if (remote.mode === "remote-unavailable") {
+        return AsyncResult.failure(
+          Cause.fail(
+            new PreferredEditorRemoteOpenUnavailableError({
+              environmentId,
+              targetPath,
+            }),
+          ),
+        );
+      }
+      const effectiveEditors =
+        remote.mode === "local-exec" ? availableEditors : remoteCapableEditors;
+      const editor = resolveAndPersistPreferredEditor(effectiveEditors);
       if (!editor) {
         return AsyncResult.failure(
           Cause.fail(
             new PreferredEditorUnavailableError({
               environmentId,
               targetPath,
-              availableEditorIds: availableEditors,
+              availableEditorIds: effectiveEditors,
             }),
           ),
         );
+      }
+      if (remote.mode === "remote-links") {
+        // VS Code's remote protocol treats the entire URI path as the remote
+        // resource. A local-style `:line:column` suffix would therefore point
+        // at a nonexistent filename on the remote host.
+        const remotePath = splitPathAndPosition(targetPath).path;
+        const url = buildRemoteOpenUrl({
+          editor,
+          host: remote.host.host,
+          absolutePath: remotePath,
+        });
+        const opened = url === undefined ? false : await openRemoteEditorUrl(url);
+        if (!opened) {
+          return AsyncResult.failure(
+            Cause.fail(
+              new PreferredEditorRemoteOpenFailedError({
+                environmentId,
+                targetPath,
+                editor,
+              }),
+            ),
+          );
+        }
+        return AsyncResult.success(editor);
       }
       const result = await openInEditor({
         environmentId,
@@ -110,6 +177,6 @@ export function useOpenInPreferredEditor(
       });
       return mapAtomCommandResult(result, () => editor);
     },
-    [availableEditors, environmentId, openInEditor],
+    [availableEditors, environmentId, openInEditor, remote, remoteCapableEditors],
   );
 }
