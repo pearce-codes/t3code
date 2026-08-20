@@ -9,7 +9,7 @@ import type { DailyTotals } from "@t3tools/shared/usageMerge";
 
 import { PROVIDER_ORDER } from "./usageProviders";
 
-export type UsageChartMetric = "cost" | "tokens";
+export type UsageChartMetric = "cost" | "tokens" | "credits";
 
 export interface UsageChartDay {
   readonly day: string;
@@ -29,7 +29,14 @@ export function buildChartDays(
     const totals = byDay.get(day);
     const values = PROVIDER_ORDER.map((provider) => {
       const entry = totals?.byProvider.get(provider);
-      const value = entry === undefined ? 0 : metric === "cost" ? entry.costUsd : entry.totalTokens;
+      const value =
+        entry === undefined
+          ? 0
+          : metric === "cost"
+            ? entry.costUsd
+            : metric === "credits"
+              ? entry.credits
+              : entry.totalTokens;
       return { provider, value };
     });
     return {

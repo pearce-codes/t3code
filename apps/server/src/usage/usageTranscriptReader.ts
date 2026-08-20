@@ -22,6 +22,7 @@ import {
   mightCarryUsage,
   parseClaudeLine,
   parseCodexLine,
+  parseKiroSession,
   type UsageRecord,
 } from "./usageTranscripts.ts";
 
@@ -32,7 +33,8 @@ export interface TranscriptFile {
 }
 
 /**
- * Lists `.jsonl` transcripts under `root` last modified at or after `sinceMs`.
+ * Lists provider transcript snapshots under `root` last modified at or after
+ * `sinceMs` (`.jsonl` for Claude/Codex, `.json` for Kiro).
  *
  * Errors on individual entries are swallowed: session files rotate and get
  * removed while the walk is in flight, and a partial listing is far better than
@@ -41,6 +43,7 @@ export interface TranscriptFile {
 export async function listTranscriptFiles(
   root: string,
   sinceMs: number,
+  provider?: UsageProviderKind,
 ): Promise<readonly TranscriptFile[]> {
   const found: TranscriptFile[] = [];
 
@@ -57,11 +60,14 @@ export async function listTranscriptFiles(
         await walk(child);
         continue;
       }
-      if (!entry.name.endsWith(".jsonl")) continue;
+      const extension = provider === "kiro" ? ".json" : ".jsonl";
+      if (!entry.name.endsWith(extension)) continue;
       try {
         const stats = await NodeFSP.stat(child);
-        if (stats.mtimeMs >= sinceMs) {
-          found.push({ path: child, size: stats.size, mtimeMs: stats.mtimeMs });
+        const size = stats.size;
+        const mtimeMs = stats.mtimeMs;
+        if (mtimeMs >= sinceMs) {
+          found.push({ path: child, size, mtimeMs });
         }
       } catch {
         // Vanished between readdir and stat.
@@ -110,6 +116,9 @@ export async function readTranscriptRecords(
   const codexState = initialCodexScanState();
 
   try {
+    if (provider === "kiro") {
+      return parseKiroSession(await NodeFSP.readFile(filePath, "utf8"));
+    }
     const lines = NodeReadline.createInterface({
       input: NodeFS.createReadStream(filePath, { encoding: "utf8" }),
       crlfDelay: Infinity,

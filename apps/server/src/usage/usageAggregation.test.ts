@@ -30,7 +30,9 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
       outputTokens: 50,
       reasoningTokens: 0,
     },
+    credits: 0,
     reportedCostUsd: null,
+    reportedCostSource: null,
     dedupeKey: null,
     ...overrides,
   };
@@ -170,6 +172,30 @@ describe("UsageAggregator", () => {
 
     expect(result.buckets[0]?.costUsd).toBe(1.25);
     expect(result.buckets[0]?.costSource).toBe("providerReported");
+  });
+
+  it("aggregates provider-native credits independently from token cost", () => {
+    const result = aggregate([
+      record({
+        provider: "kiro",
+        model: "auto",
+        credits: 0.25,
+        reportedCostUsd: 0.01,
+        reportedCostSource: "creditEstimated",
+      }),
+      record({
+        provider: "kiro",
+        model: "auto",
+        credits: 0.5,
+        reportedCostUsd: 0.02,
+        reportedCostSource: "creditEstimated",
+        dedupeKey: "kiro-turn-2",
+      }),
+    ]);
+
+    expect(result.buckets[0]?.credits).toBe(0.75);
+    expect(result.buckets[0]?.costUsd).toBeCloseTo(0.03, 9);
+    expect(result.buckets[0]?.costSource).toBe("creditEstimated");
   });
 
   it("drops records outside the window", () => {

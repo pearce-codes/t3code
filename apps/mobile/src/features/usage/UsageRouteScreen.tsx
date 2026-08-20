@@ -4,6 +4,7 @@ import {
   enumerateDays,
   enumerateHourStarts,
   formatCount,
+  formatCredits,
   formatDayShort,
   formatHourShort,
   formatPercent,
@@ -62,6 +63,7 @@ export function UsageRouteScreen() {
         ? merged.hourly.map((hour) => ({
             day: hour.hourStart,
             costUsd: hour.costUsd,
+            credits: hour.credits,
             totalTokens: hour.totalTokens,
             byProvider: hour.byProvider,
           }))
@@ -197,22 +199,36 @@ function ChartCard(props: {
 }) {
   const { merged, metric } = props;
   const colors = useProviderColors();
-  const hasActivity = props.daily.some((period) => period.totalTokens > 0);
+  const hasActivity = props.daily.some(
+    (period) => period.totalTokens > 0 || period.costUsd > 0 || period.credits > 0,
+  );
 
   return (
     <View className="gap-4 rounded-[24px] border-continuous bg-card p-4">
       <View className="flex-row items-start justify-between gap-3">
         <View className="min-w-0 flex-1 gap-0.5">
           <Text className="text-sm text-foreground-muted">
-            {metric === "cost" ? "Raw token cost" : "Processed tokens"}
+            {metric === "cost"
+              ? "Estimated cost"
+              : metric === "credits"
+                ? "Kiro credits"
+                : "Processed tokens"}
           </Text>
           <Text className="text-4xl font-t3-bold tabular-nums text-foreground">
-            {metric === "cost" ? `${formatUsd(merged.costUsd)}*` : formatTokens(merged.totalTokens)}
+            {metric === "cost"
+              ? `${merged.costQuality.creditEstimatedShare > 0 ? "~" : ""}${formatUsd(merged.costUsd)}*`
+              : metric === "credits"
+                ? formatCredits(merged.credits)
+                : formatTokens(merged.totalTokens)}
           </Text>
           <Text className="text-sm text-foreground-muted">
             {metric === "cost"
-              ? "* if billed at full API rate"
-              : `Across ${formatCount(merged.sessions)} sessions`}
+              ? merged.costQuality.creditEstimatedShare > 0
+                ? "* Kiro uses the $0.04 marginal credit price"
+                : "* if billed at full API rate"
+              : metric === "credits"
+                ? "Provider-reported Kiro metering"
+                : `Across ${formatCount(merged.sessions)} sessions`}
           </Text>
         </View>
         <MetricToggle metric={metric} onChange={props.onMetricChange} />
@@ -266,7 +282,7 @@ function MetricToggle(props: {
 }) {
   return (
     <View className="flex-row overflow-hidden rounded-full bg-subtle">
-      {(["cost", "tokens"] as const).map((option) => {
+      {(["cost", "tokens", "credits"] as const).map((option) => {
         const active = option === props.metric;
         return (
           <Pressable
@@ -302,14 +318,21 @@ function ProviderSection(props: {
 
   // Ranked by whatever the toggle is showing, so the rows always descend.
   // .sort() on a copy, not .toSorted(): Hermes doesn't ship the ES2023 method.
-  const ordered = [...merged.providers].sort((a, b) =>
-    metric === "cost" ? b.costUsd - a.costUsd : b.totalTokens - a.totalTokens,
-  );
+  const ordered = [...merged.providers].sort((a, b) => {
+    if (metric === "cost") return b.costUsd - a.costUsd;
+    if (metric === "credits") return b.credits - a.credits;
+    return b.totalTokens - a.totalTokens;
+  });
 
   return (
     <SettingsSection title="Providers" card>
       {ordered.map((provider, index) => {
-        const share = metric === "cost" ? provider.costShare : provider.tokenShare;
+        const share =
+          metric === "cost"
+            ? provider.costShare
+            : metric === "credits"
+              ? provider.creditShare
+              : provider.tokenShare;
         return (
           <View
             key={provider.provider}
@@ -325,8 +348,10 @@ function ProviderSection(props: {
               </View>
               <Text className="text-lg tabular-nums text-foreground">
                 {metric === "cost"
-                  ? formatUsd(provider.costUsd)
-                  : formatTokens(provider.totalTokens)}
+                  ? `${provider.provider === "kiro" ? "~" : ""}${formatUsd(provider.costUsd)}`
+                  : metric === "credits"
+                    ? formatCredits(provider.credits)
+                    : formatTokens(provider.totalTokens)}
               </Text>
             </View>
             <View className="h-1 flex-row overflow-hidden rounded-full bg-subtle">
@@ -339,7 +364,9 @@ function ProviderSection(props: {
             <Text className="text-sm text-foreground-muted">
               {metric === "cost"
                 ? `${formatPercent(share)} of cost · ${formatTokens(provider.totalTokens)} tokens`
-                : `${formatPercent(share)} of tokens · ${formatUsd(provider.costUsd)}`}
+                : metric === "credits"
+                  ? `${formatPercent(share)} of credits`
+                  : `${formatPercent(share)} of tokens · ${formatUsd(provider.costUsd)}`}
             </Text>
           </View>
         );
@@ -360,6 +387,11 @@ function TotalsSection(props: { readonly merged: MergedUsage; readonly isPast24H
   return (
     <SettingsSection title="Totals" card>
       <View className="flex-row flex-wrap">
+        <MetricCell
+          label="Kiro credits"
+          value={formatCredits(merged.credits)}
+          detail="provider-reported metering"
+        />
         <MetricCell
           label="Processed tokens"
           value={formatTokens(merged.totalTokens)}
@@ -438,10 +470,14 @@ function ModelsSection(props: { readonly merged: MergedUsage }) {
               {model.model}
             </Text>
             <Text className="text-sm text-foreground-muted">
-              {formatPercent(model.costShare)} of cost · {formatTokens(model.totalTokens)} tokens
+              {model.credits > 0
+                ? `${formatCredits(model.credits)} · ${formatPercent(model.creditShare)} of credits`
+                : `${formatPercent(model.costShare)} of cost · ${formatTokens(model.totalTokens)} tokens`}
             </Text>
           </View>
-          <Text className="text-base tabular-nums text-foreground">{formatUsd(model.costUsd)}</Text>
+          <Text className="text-base tabular-nums text-foreground">
+            {model.credits > 0 ? `~${formatUsd(model.costUsd)}` : formatUsd(model.costUsd)}
+          </Text>
         </View>
       ))}
     </SettingsSection>

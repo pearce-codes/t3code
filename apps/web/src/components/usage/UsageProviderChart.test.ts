@@ -48,10 +48,11 @@ describe("buildDayColumns", () => {
       {
         day: "2026-08-01",
         costUsd: 30,
+        credits: 0,
         totalTokens: 300,
         byProvider: new Map([
-          ["codex" as const, { costUsd: 10, totalTokens: 100 }],
-          ["claude" as const, { costUsd: 20, totalTokens: 200 }],
+          ["codex" as const, { costUsd: 10, credits: 0, totalTokens: 100 }],
+          ["claude" as const, { costUsd: 20, credits: 0, totalTokens: 200 }],
         ]),
       },
     ],
@@ -61,8 +62,9 @@ describe("buildDayColumns", () => {
       {
         day: "2026-08-03",
         costUsd: 5,
+        credits: 0,
         totalTokens: 50,
-        byProvider: new Map([["claude" as const, { costUsd: 5, totalTokens: 50 }]]),
+        byProvider: new Map([["claude" as const, { costUsd: 5, credits: 0, totalTokens: 50 }]]),
       },
     ],
   ]);
@@ -85,6 +87,7 @@ describe("buildDayColumns", () => {
     expect(first?.bands).toEqual([
       { provider: "codex", value: 10 },
       { provider: "claude", value: 20 },
+      { provider: "kiro", value: 0 },
     ]);
   });
 
@@ -105,8 +108,9 @@ describe("hourly chart columns", () => {
           day: "2026-08-11",
           hourStart: "2026-08-11T09:37:00.000Z",
           costUsd: 4,
+          credits: 0,
           totalTokens: 40,
-          byProvider: new Map([["codex" as const, { costUsd: 4, totalTokens: 40 }]]),
+          byProvider: new Map([["codex" as const, { costUsd: 4, credits: 0, totalTokens: 40 }]]),
         },
       ],
     ]);

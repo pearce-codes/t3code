@@ -2,7 +2,12 @@ import type { UsageProviderKind } from "@t3tools/contracts";
 import { CheckIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import type { DailyTotals, HourlyTotals } from "@t3tools/shared/usageMerge";
+import type {
+  DailyTotals,
+  HourlyTotals,
+  MergedUsage,
+  ProviderTotals,
+} from "@t3tools/shared/usageMerge";
 
 import { isElectron } from "../../env";
 import { cn } from "../../lib/utils";
@@ -11,6 +16,7 @@ import {
   enumerateDays,
   enumerateHourStarts,
   formatCount,
+  formatCredits,
   formatDateTimeShort,
   formatDayShort,
   formatHourShort,
@@ -33,6 +39,27 @@ const WINDOW_OPTIONS = [
   { days: 30, label: "30 days" },
   { days: 90, label: "90 days" },
 ] as const;
+
+function providerMetricValue(provider: ProviderTotals, metric: UsageChartMetric): number {
+  if (metric === "cost") return provider.costUsd;
+  if (metric === "credits") return provider.credits;
+  return provider.totalTokens;
+}
+
+function providerMetricShare(provider: ProviderTotals, metric: UsageChartMetric): number {
+  if (metric === "cost") return provider.costShare;
+  if (metric === "credits") return provider.creditShare;
+  return provider.tokenShare;
+}
+
+function formatUsageMetric(metric: UsageChartMetric, usage: MergedUsage): string {
+  if (metric === "cost") {
+    const approximate = usage.costQuality.creditEstimatedShare > 0 ? "~" : "";
+    return `${approximate}${formatUsd(usage.costUsd)}*`;
+  }
+  if (metric === "credits") return formatCredits(usage.credits);
+  return formatTokens(usage.totalTokens);
+}
 
 export function UsagePage() {
   const [windowSelection, setWindowSelection] = useState(() => ({
@@ -69,8 +96,8 @@ export function UsagePage() {
   // Ranked by whatever the toggle is showing, so the bars always descend.
   const orderedProviders = useMemo(
     () =>
-      merged.providers.toSorted((a, b) =>
-        metric === "cost" ? b.costUsd - a.costUsd : b.totalTokens - a.totalTokens,
+      merged.providers.toSorted(
+        (a, b) => providerMetricValue(b, metric) - providerMetricValue(a, metric),
       ),
     [merged.providers, metric],
   );
@@ -188,22 +215,28 @@ export function UsagePage() {
                   <div className="flex flex-col gap-5">
                     <div className="flex flex-col gap-1">
                       <span className="text-xs tracking-wide text-muted-foreground uppercase">
-                        {metric === "cost" ? "Raw token cost" : "Processed tokens"}
+                        {metric === "cost"
+                          ? "Estimated cost"
+                          : metric === "credits"
+                            ? "Kiro credits"
+                            : "Processed tokens"}
                       </span>
                       <span className="text-4xl font-semibold text-foreground tabular-nums">
-                        {metric === "cost"
-                          ? `${formatUsd(merged.costUsd)}*`
-                          : formatTokens(merged.totalTokens)}
+                        {formatUsageMetric(metric, merged)}
                       </span>
                       <span className="text-xs text-muted-foreground">
                         {metric === "cost"
-                          ? "* if billed at full API rate"
-                          : `Input, cache reads and output across ${formatCount(merged.sessions)} sessions.`}
+                          ? merged.costQuality.creditEstimatedShare > 0
+                            ? "* API-equivalent cost; Kiro uses the $0.04 marginal credit price."
+                            : "* if billed at full API rate"
+                          : metric === "credits"
+                            ? "Provider-reported Kiro metering credits."
+                            : `Input, cache reads and output across ${formatCount(merged.sessions)} sessions.`}
                       </span>
                     </div>
 
                     {orderedProviders.map((provider) => {
-                      const share = metric === "cost" ? provider.costShare : provider.tokenShare;
+                      const share = providerMetricShare(provider, metric);
                       return (
                         <div key={provider.provider} className="flex flex-col gap-1.5">
                           <div className="flex items-baseline justify-between">
@@ -213,8 +246,10 @@ export function UsagePage() {
                             </span>
                             <span className="text-sm text-foreground tabular-nums">
                               {metric === "cost"
-                                ? formatUsd(provider.costUsd)
-                                : formatTokens(provider.totalTokens)}
+                                ? `${provider.provider === "kiro" ? "~" : ""}${formatUsd(provider.costUsd)}`
+                                : metric === "credits"
+                                  ? formatCredits(provider.credits)
+                                  : formatTokens(provider.totalTokens)}
                             </span>
                           </div>
                           <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
@@ -229,7 +264,9 @@ export function UsagePage() {
                           <span className="text-xs text-muted-foreground">
                             {metric === "cost"
                               ? `${formatPercent(share)} of cost · ${formatTokens(provider.totalTokens)} tokens`
-                              : `${formatPercent(share)} of tokens · ${formatUsd(provider.costUsd)}`}
+                              : metric === "credits"
+                                ? `${formatPercent(share)} of credits`
+                                : `${formatPercent(share)} of tokens · ${formatUsd(provider.costUsd)}`}
                           </span>
                         </div>
                       );
@@ -240,11 +277,11 @@ export function UsagePage() {
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <h2 className="text-sm font-medium text-foreground">
                         {isPast24Hours ? "Hourly" : "Daily"}{" "}
-                        {metric === "tokens" ? "processed tokens" : "cost"}
+                        {metric === "tokens" ? "processed tokens" : metric}
                       </h2>
                       <div className="flex items-center gap-4">
                         <div className="flex overflow-hidden rounded-md border border-border">
-                          {(["cost", "tokens"] as const).map((option) => (
+                          {(["cost", "tokens", "credits"] as const).map((option) => (
                             <button
                               key={option}
                               type="button"
@@ -276,7 +313,12 @@ export function UsagePage() {
                   </div>
                 </section>
 
-                <section className="grid grid-cols-2 gap-px border-y border-border bg-border md:grid-cols-5">
+                <section className="grid grid-cols-2 gap-px border-y border-border bg-border md:grid-cols-6">
+                  <Metric
+                    label="Kiro credits"
+                    value={formatCredits(merged.credits)}
+                    detail="provider-reported metering"
+                  />
                   <Metric
                     label="Processed tokens"
                     value={formatTokens(merged.totalTokens)}
@@ -343,12 +385,13 @@ export function UsagePage() {
                           <th className="py-2 text-right font-normal">Cost</th>
                           <th className="py-2 text-right font-normal">Share</th>
                           <th className="py-2 text-right font-normal">Tokens</th>
+                          <th className="py-2 text-right font-normal">Credits</th>
                         </tr>
                       </thead>
                       <tbody>
                         {merged.models.length === 0 ? (
                           <tr>
-                            <td colSpan={4} className="py-6 text-center text-muted-foreground">
+                            <td colSpan={5} className="py-6 text-center text-muted-foreground">
                               No activity in this window.
                             </td>
                           </tr>
@@ -365,13 +408,20 @@ export function UsagePage() {
                                 </span>
                               </td>
                               <td className="py-2 text-right text-foreground tabular-nums">
-                                {formatUsd(model.costUsd)}
+                                {model.provider === "kiro"
+                                  ? `~${formatUsd(model.costUsd)}`
+                                  : formatUsd(model.costUsd)}
                               </td>
                               <td className="py-2 text-right text-muted-foreground tabular-nums">
-                                {formatPercent(model.costShare)}
+                                {formatPercent(
+                                  model.credits > 0 ? model.creditShare : model.costShare,
+                                )}
                               </td>
                               <td className="py-2 text-right text-muted-foreground tabular-nums">
                                 {formatTokens(model.totalTokens)}
+                              </td>
+                              <td className="py-2 text-right text-muted-foreground tabular-nums">
+                                {formatCredits(model.credits)}
                               </td>
                             </tr>
                           ))
@@ -390,12 +440,13 @@ export function UsagePage() {
                           ))}
                           <th className="py-2 text-right font-normal">Total</th>
                           <th className="py-2 text-right font-normal">Tokens</th>
+                          <th className="py-2 text-right font-normal">Credits</th>
                         </tr>
                       </thead>
                       <tbody>
                         {recentPeriods.length === 0 ? (
                           <tr>
-                            <td colSpan={5} className="py-6 text-center text-muted-foreground">
+                            <td colSpan={7} className="py-6 text-center text-muted-foreground">
                               No activity in this window.
                             </td>
                           </tr>
@@ -423,6 +474,9 @@ export function UsagePage() {
                               </td>
                               <td className="py-2 text-right text-muted-foreground tabular-nums">
                                 {formatTokens(period.totalTokens)}
+                              </td>
+                              <td className="py-2 text-right text-muted-foreground tabular-nums">
+                                {formatCredits(period.credits)}
                               </td>
                             </tr>
                           ))
@@ -584,7 +638,7 @@ function UsageSkeleton({ resolution }: { readonly resolution: "day" | "hour" }) 
         <div className="flex flex-col gap-5">
           <div className="flex flex-col gap-1">
             <span className="text-xs tracking-wide text-muted-foreground uppercase">
-              Raw token cost
+              Estimated cost
             </span>
             <div className="my-1.5 h-8 w-36 rounded-sm bg-muted" />
             <div className="h-3 w-28 rounded-sm bg-muted" />
@@ -623,16 +677,21 @@ function UsageSkeleton({ resolution }: { readonly resolution: "day" | "hour" }) 
         </div>
       </section>
 
-      <section className="grid grid-cols-2 gap-px border-y border-border bg-border md:grid-cols-5">
-        {["Processed tokens", "Cached input", "Uncached input", "Output", "Cache savings"].map(
-          (label) => (
-            <div key={label} className="flex flex-col gap-0.5 bg-background px-4 py-3">
-              <span className="text-xs text-muted-foreground">{label}</span>
-              <div className="my-1 h-5 w-16 rounded-sm bg-muted" />
-              <div className="h-3 w-24 rounded-sm bg-muted" />
-            </div>
-          ),
-        )}
+      <section className="grid grid-cols-2 gap-px border-y border-border bg-border md:grid-cols-6">
+        {[
+          "Processed tokens",
+          "Kiro credits",
+          "Cached input",
+          "Uncached input",
+          "Output",
+          "Cache savings",
+        ].map((label) => (
+          <div key={label} className="flex flex-col gap-0.5 bg-background px-4 py-3">
+            <span className="text-xs text-muted-foreground">{label}</span>
+            <div className="my-1 h-5 w-16 rounded-sm bg-muted" />
+            <div className="h-3 w-24 rounded-sm bg-muted" />
+          </div>
+        ))}
       </section>
     </>
   );

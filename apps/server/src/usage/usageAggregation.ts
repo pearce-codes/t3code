@@ -48,11 +48,13 @@ const HOUR_MS = 60 * 60 * 1000;
 
 interface MutableBucket {
   totals: UsageTokenTotals;
+  credits: number;
   costUsd: number;
   cacheSavingsUsd: number;
   records: number;
   unpricedRecords: number;
   providerReportedRecords: number;
+  creditEstimatedRecords: number;
   sessions: Set<string>;
 }
 
@@ -150,11 +152,13 @@ export class UsageAggregator {
     if (bucket === undefined) {
       bucket = {
         totals: EMPTY_TOTALS,
+        credits: 0,
         costUsd: 0,
         cacheSavingsUsd: 0,
         records: 0,
         unpricedRecords: 0,
         providerReportedRecords: 0,
+        creditEstimatedRecords: 0,
         sessions: new Set<string>(),
       };
       this.#buckets.set(key, bucket);
@@ -165,14 +169,17 @@ export class UsageAggregator {
       record.model,
       record.totals,
       record.reportedCostUsd,
+      record.reportedCostSource,
     );
 
     bucket.totals = addTotals(bucket.totals, record.totals);
+    bucket.credits += record.credits;
     bucket.costUsd += priced.costUsd;
     bucket.cacheSavingsUsd += cacheSavingsUsd(this.#options.rates, record.model, record.totals);
     bucket.records += 1;
     if (priced.costSource === "unpriced") bucket.unpricedRecords += 1;
     if (priced.costSource === "providerReported") bucket.providerReportedRecords += 1;
+    if (priced.costSource === "creditEstimated") bucket.creditEstimatedRecords += 1;
     if (record.sessionId.length > 0) bucket.sessions.add(record.sessionId);
     return true;
   }
@@ -187,6 +194,7 @@ export class UsageAggregator {
         provider: provider as UsageBucket["provider"],
         model,
         totals: bucket.totals,
+        credits: bucket.credits,
         costUsd: bucket.costUsd,
         cacheSavingsUsd: bucket.cacheSavingsUsd,
         costSource: resolveCostSource(bucket),
@@ -220,5 +228,6 @@ export class UsageAggregator {
 function resolveCostSource(bucket: MutableBucket): UsageBucket["costSource"] {
   if (bucket.unpricedRecords === bucket.records) return "unpriced";
   if (bucket.providerReportedRecords === bucket.records) return "providerReported";
+  if (bucket.creditEstimatedRecords === bucket.records) return "creditEstimated";
   return "modelPriced";
 }

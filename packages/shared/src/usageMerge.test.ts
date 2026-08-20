@@ -22,6 +22,7 @@ function bucket(overrides: Partial<UsageBucket> = {}): UsageBucket {
       outputTokens: 50,
       reasoningTokens: 0,
     },
+    credits: 0,
     costUsd: 10,
     cacheSavingsUsd: 2,
     costSource: "modelPriced",
@@ -187,6 +188,43 @@ describe("mergeUsage", () => {
     expect(merged.providers[0]?.costShare).toBeCloseTo(0.75, 5);
     expect(merged.costQuality.unpricedShare).toBeCloseTo(0.5, 5);
     expect(merged.costQuality.cacheSavingsUsd).toBe(4);
+  });
+
+  it("merges Kiro credits independently from tokens and cost", () => {
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [
+              bucket({
+                provider: "kiro",
+                model: "auto",
+                credits: 3.25,
+                costUsd: 0.13,
+                costSource: "creditEstimated",
+                totals: {
+                  uncachedInputTokens: 0,
+                  cachedInputTokens: 0,
+                  cacheCreationTokens: 0,
+                  outputTokens: 0,
+                  reasoningTokens: 0,
+                },
+              }),
+            ],
+            [{ provider: "kiro", hostId: "mac", homePath: "/a/.kiro" }],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.credits).toBe(3.25);
+    expect(merged.costUsd).toBe(0.13);
+    expect(merged.totalTokens).toBe(0);
+    expect(merged.providers[0]).toMatchObject({ provider: "kiro", creditShare: 1 });
+    expect(merged.costQuality.creditEstimatedShare).toBe(1);
+    expect(merged.daily[0]?.credits).toBe(3.25);
   });
 
   it("keeps two machines apart when hostname and home path collide", () => {

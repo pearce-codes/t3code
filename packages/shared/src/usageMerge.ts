@@ -23,45 +23,59 @@ export interface EnvironmentUsage {
 export interface ProviderTotals {
   readonly provider: UsageProviderKind;
   readonly costUsd: number;
+  readonly credits: number;
   readonly totalTokens: number;
   readonly records: number;
   readonly costShare: number;
   readonly tokenShare: number;
+  readonly creditShare: number;
 }
 
 export interface ModelTotals {
   readonly model: string;
   readonly provider: UsageProviderKind;
   readonly costUsd: number;
+  readonly credits: number;
   readonly totalTokens: number;
   readonly records: number;
   readonly costShare: number;
+  readonly creditShare: number;
 }
 
 export interface DailyTotals {
   readonly day: string;
   readonly costUsd: number;
+  readonly credits: number;
   readonly totalTokens: number;
-  readonly byProvider: ReadonlyMap<UsageProviderKind, { costUsd: number; totalTokens: number }>;
+  readonly byProvider: ReadonlyMap<
+    UsageProviderKind,
+    { costUsd: number; credits: number; totalTokens: number }
+  >;
 }
 
 export interface HourlyTotals {
   readonly day: string;
   readonly hourStart: string;
   readonly costUsd: number;
+  readonly credits: number;
   readonly totalTokens: number;
-  readonly byProvider: ReadonlyMap<UsageProviderKind, { costUsd: number; totalTokens: number }>;
+  readonly byProvider: ReadonlyMap<
+    UsageProviderKind,
+    { costUsd: number; credits: number; totalTokens: number }
+  >;
 }
 
 export interface CostQuality {
   readonly providerReportedShare: number;
   readonly modelPricedShare: number;
   readonly unpricedShare: number;
+  readonly creditEstimatedShare: number;
   readonly cacheSavingsUsd: number;
 }
 
 export interface MergedUsage {
   readonly costUsd: number;
+  readonly credits: number;
   readonly uncachedInputTokens: number;
   readonly cachedInputTokens: number;
   readonly cacheCreationTokens: number;
@@ -166,6 +180,7 @@ function bucketTokens(bucket: UsageBucket): number {
 
 const EMPTY_MERGED: MergedUsage = {
   costUsd: 0,
+  credits: 0,
   uncachedInputTokens: 0,
   cachedInputTokens: 0,
   cacheCreationTokens: 0,
@@ -182,6 +197,7 @@ const EMPTY_MERGED: MergedUsage = {
     providerReportedShare: 0,
     modelPricedShare: 0,
     unpricedShare: 0,
+    creditEstimatedShare: 0,
     cacheSavingsUsd: 0,
   },
   duplicateSources: [],
@@ -215,6 +231,7 @@ export function mergeUsage(
   const { ownerByFingerprint, duplicates } = claimSources(current);
 
   let costUsd = 0;
+  let credits = 0;
   let uncachedInputTokens = 0;
   let cachedInputTokens = 0;
   let cacheCreationTokens = 0;
@@ -225,21 +242,35 @@ export function mergeUsage(
   let cacheSavingsUsd = 0;
   let providerReportedRecords = 0;
   let unpricedRecords = 0;
+  let creditEstimatedRecords = 0;
+  let pricingRecords = 0;
 
   const providerAccumulator = new Map<
     UsageProviderKind,
-    { costUsd: number; totalTokens: number; records: number }
+    {
+      costUsd: number;
+      credits: number;
+      totalTokens: number;
+      records: number;
+    }
   >();
   const modelAccumulator = new Map<
     string,
-    { provider: UsageProviderKind; costUsd: number; totalTokens: number; records: number }
+    {
+      provider: UsageProviderKind;
+      costUsd: number;
+      credits: number;
+      totalTokens: number;
+      records: number;
+    }
   >();
   const dailyAccumulator = new Map<
     string,
     {
       costUsd: number;
+      credits: number;
       totalTokens: number;
-      byProvider: Map<UsageProviderKind, { costUsd: number; totalTokens: number }>;
+      byProvider: Map<UsageProviderKind, { costUsd: number; credits: number; totalTokens: number }>;
     }
   >();
   const hourlyAccumulator = new Map<
@@ -248,8 +279,9 @@ export function mergeUsage(
       day: string;
       hourStart: string;
       costUsd: number;
+      credits: number;
       totalTokens: number;
-      byProvider: Map<UsageProviderKind, { costUsd: number; totalTokens: number }>;
+      byProvider: Map<UsageProviderKind, { costUsd: number; credits: number; totalTokens: number }>;
     }
   >();
   const contributingEnvironments: EnvironmentId[] = [];
@@ -266,6 +298,7 @@ export function mergeUsage(
       const tokens = bucketTokens(bucket);
 
       costUsd += bucket.costUsd;
+      credits += bucket.credits;
       cacheSavingsUsd += bucket.cacheSavingsUsd;
       uncachedInputTokens += bucket.totals.uncachedInputTokens;
       cachedInputTokens += bucket.totals.cachedInputTokens;
@@ -273,15 +306,21 @@ export function mergeUsage(
       outputTokens += bucket.totals.outputTokens;
       reasoningTokens += bucket.totals.reasoningTokens;
       records += bucket.records;
-      unpricedRecords += bucket.unpricedRecords;
-      if (bucket.costSource === "providerReported") providerReportedRecords += bucket.records;
+      if (tokens > 0 || bucket.costUsd > 0) {
+        pricingRecords += bucket.records;
+        unpricedRecords += bucket.unpricedRecords;
+        if (bucket.costSource === "providerReported") providerReportedRecords += bucket.records;
+        if (bucket.costSource === "creditEstimated") creditEstimatedRecords += bucket.records;
+      }
 
       const provider = providerAccumulator.get(bucket.provider) ?? {
         costUsd: 0,
+        credits: 0,
         totalTokens: 0,
         records: 0,
       };
       provider.costUsd += bucket.costUsd;
+      provider.credits += bucket.credits;
       provider.totalTokens += tokens;
       provider.records += bucket.records;
       providerAccumulator.set(bucket.provider, provider);
@@ -290,23 +329,35 @@ export function mergeUsage(
       const model = modelAccumulator.get(modelKey) ?? {
         provider: bucket.provider,
         costUsd: 0,
+        credits: 0,
         totalTokens: 0,
         records: 0,
       };
       model.costUsd += bucket.costUsd;
+      model.credits += bucket.credits;
       model.totalTokens += tokens;
       model.records += bucket.records;
       modelAccumulator.set(modelKey, model);
 
       const day = dailyAccumulator.get(bucket.day) ?? {
         costUsd: 0,
+        credits: 0,
         totalTokens: 0,
-        byProvider: new Map<UsageProviderKind, { costUsd: number; totalTokens: number }>(),
+        byProvider: new Map<
+          UsageProviderKind,
+          { costUsd: number; credits: number; totalTokens: number }
+        >(),
       };
       day.costUsd += bucket.costUsd;
+      day.credits += bucket.credits;
       day.totalTokens += tokens;
-      const dayProvider = day.byProvider.get(bucket.provider) ?? { costUsd: 0, totalTokens: 0 };
+      const dayProvider = day.byProvider.get(bucket.provider) ?? {
+        costUsd: 0,
+        credits: 0,
+        totalTokens: 0,
+      };
       dayProvider.costUsd += bucket.costUsd;
+      dayProvider.credits += bucket.credits;
       dayProvider.totalTokens += tokens;
       day.byProvider.set(bucket.provider, dayProvider);
       dailyAccumulator.set(bucket.day, day);
@@ -316,16 +367,23 @@ export function mergeUsage(
           day: bucket.day,
           hourStart: bucket.hourStart,
           costUsd: 0,
+          credits: 0,
           totalTokens: 0,
-          byProvider: new Map<UsageProviderKind, { costUsd: number; totalTokens: number }>(),
+          byProvider: new Map<
+            UsageProviderKind,
+            { costUsd: number; credits: number; totalTokens: number }
+          >(),
         };
         hour.costUsd += bucket.costUsd;
+        hour.credits += bucket.credits;
         hour.totalTokens += tokens;
         const hourProvider = hour.byProvider.get(bucket.provider) ?? {
           costUsd: 0,
+          credits: 0,
           totalTokens: 0,
         };
         hourProvider.costUsd += bucket.costUsd;
+        hourProvider.credits += bucket.credits;
         hourProvider.totalTokens += tokens;
         hour.byProvider.set(bucket.provider, hourProvider);
         hourlyAccumulator.set(bucket.hourStart, hour);
@@ -334,33 +392,41 @@ export function mergeUsage(
   }
 
   const totalTokens = uncachedInputTokens + cachedInputTokens + cacheCreationTokens + outputTokens;
-
   const providers: ProviderTotals[] = [...providerAccumulator.entries()]
     .map(([provider, totals]) => ({
       provider,
       costUsd: totals.costUsd,
+      credits: totals.credits,
       totalTokens: totals.totalTokens,
       records: totals.records,
       costShare: costUsd === 0 ? 0 : totals.costUsd / costUsd,
       tokenShare: totalTokens === 0 ? 0 : totals.totalTokens / totalTokens,
+      creditShare: credits === 0 ? 0 : totals.credits / credits,
     }))
-    .sort((a, b) => b.costUsd - a.costUsd);
+    .sort(
+      (a, b) => b.costUsd - a.costUsd || b.credits - a.credits || b.totalTokens - a.totalTokens,
+    );
 
   const models: ModelTotals[] = [...modelAccumulator.entries()]
     .map(([key, totals]) => ({
       model: key.slice(key.indexOf(" ") + 1),
       provider: totals.provider,
       costUsd: totals.costUsd,
+      credits: totals.credits,
       totalTokens: totals.totalTokens,
       records: totals.records,
       costShare: costUsd === 0 ? 0 : totals.costUsd / costUsd,
+      creditShare: credits === 0 ? 0 : totals.credits / credits,
     }))
-    .sort((a, b) => b.costUsd - a.costUsd || b.totalTokens - a.totalTokens);
+    .sort(
+      (a, b) => b.costUsd - a.costUsd || b.credits - a.credits || b.totalTokens - a.totalTokens,
+    );
 
   const daily: DailyTotals[] = [...dailyAccumulator.entries()]
     .map(([day, totals]) => ({
       day,
       costUsd: totals.costUsd,
+      credits: totals.credits,
       totalTokens: totals.totalTokens,
       byProvider: totals.byProvider,
     }))
@@ -372,6 +438,7 @@ export function mergeUsage(
 
   return {
     costUsd,
+    credits,
     uncachedInputTokens,
     cachedInputTokens,
     cacheCreationTokens,
@@ -385,10 +452,14 @@ export function mergeUsage(
     daily,
     hourly,
     costQuality: {
-      providerReportedShare: records === 0 ? 0 : providerReportedRecords / records,
-      unpricedShare: records === 0 ? 0 : unpricedRecords / records,
+      providerReportedShare: pricingRecords === 0 ? 0 : providerReportedRecords / pricingRecords,
+      unpricedShare: pricingRecords === 0 ? 0 : unpricedRecords / pricingRecords,
+      creditEstimatedShare: pricingRecords === 0 ? 0 : creditEstimatedRecords / pricingRecords,
       modelPricedShare:
-        records === 0 ? 0 : (records - providerReportedRecords - unpricedRecords) / records,
+        pricingRecords === 0
+          ? 0
+          : (pricingRecords - providerReportedRecords - creditEstimatedRecords - unpricedRecords) /
+            pricingRecords,
       cacheSavingsUsd,
     },
     duplicateSources: duplicates,
