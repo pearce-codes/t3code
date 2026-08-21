@@ -1,13 +1,13 @@
-import {
-  type DirItem,
-  type DirSearchResult,
-  type FileItem,
+import type {
+  DirItem,
+  DirSearchResult,
+  FileItem,
   FileFinder,
-  type GrepCursor,
-  type MixedItem,
-  type MixedSearchResult,
-  type Result,
-  type SearchResult,
+  GrepCursor,
+  MixedItem,
+  MixedSearchResult,
+  Result,
+  SearchResult,
 } from "@ff-labs/fff-node";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -301,6 +301,18 @@ const createFinder = Effect.fn("WorkspaceSearchIndex.createFinder")(function* (
   cwd: string,
   variant: WorkspaceSearchIndexVariant,
 ) {
+  const FileFinder = yield* Effect.tryPromise({
+    try: () =>
+      import(/* @vite-ignore */ ["@ff-labs", "fff-node"].join("/")).then(
+        (module: typeof import("@ff-labs/fff-node")) => module.FileFinder,
+      ),
+    catch: (cause) =>
+      new WorkspaceSearchIndexCreateFailed({
+        cwd,
+        reason: "FileFinder native module failed to load.",
+        cause,
+      }),
+  });
   const result = yield* Effect.try({
     try: () =>
       FileFinder.create({
