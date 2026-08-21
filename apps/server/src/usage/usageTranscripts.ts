@@ -14,7 +14,9 @@ export interface UsageRecord {
   readonly model: string;
   readonly sessionId: string;
   readonly totals: UsageTokenTotals;
+  readonly credits: number;
   readonly reportedCostUsd: number | null;
+  readonly reportedCostSource: "providerReported" | "creditEstimated" | null;
   /**
    * Key for cross-file de-duplication, or `null` when the record is inherently
    * unique and needs no dedup.
@@ -68,7 +70,9 @@ export function totalTokens(totals: UsageTokenTotals): number {
  * an order of magnitude.
  */
 export function mightCarryUsage(line: string, provider: UsageProviderKind): boolean {
-  return provider === "claude" ? line.includes('"usage"') : line.includes('"token_count"');
+  if (provider === "claude") return line.includes('"usage"');
+  if (provider === "codex") return line.includes('"token_count"');
+  return line.includes('"metering_usage"');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -131,7 +135,10 @@ export function parseClaudeLine(line: string): UsageRecord | null {
       // Anthropic folds thinking tokens into output and does not break them out.
       reasoningTokens: 0,
     },
+    credits: 0,
     reportedCostUsd: typeof cost === "number" && Number.isFinite(cost) ? cost : null,
+    reportedCostSource:
+      typeof cost === "number" && Number.isFinite(cost) ? "providerReported" : null,
     dedupeKey,
   };
 }
@@ -289,12 +296,93 @@ export function parseCodexLine(line: string, state: CodexScanState): UsageRecord
     model: state.model,
     sessionId: state.sessionId,
     totals,
+    credits: 0,
     // Codex does not report cost in the rollout.
     reportedCostUsd: null,
+    reportedCostSource: null,
     // Events surviving the fork-copy suppression above are unique to this
     // rollout, so they need no global dedup.
     dedupeKey: null,
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Kiro                                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Parses a Kiro CLI session snapshot into one record per completed user turn.
+ * Kiro persists provider-native metering credits; its token counters are
+ * currently written as zero and are therefore intentionally not surfaced.
+ */
+export function parseKiroSession(document: string): readonly UsageRecord[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(document);
+  } catch {
+    return [];
+  }
+  if (typeof parsed !== "object" || parsed === null) return [];
+
+  const root = parsed as Record<string, unknown>;
+  const sessionId = typeof root["session_id"] === "string" ? root["session_id"] : "";
+  const sessionState = root["session_state"];
+  if (typeof sessionState !== "object" || sessionState === null) return [];
+  const state = sessionState as Record<string, unknown>;
+  const runtimeModelState = state["rts_model_state"];
+  const modelInfo =
+    typeof runtimeModelState === "object" && runtimeModelState !== null
+      ? (runtimeModelState as Record<string, unknown>)["model_info"]
+      : null;
+  const modelId =
+    typeof modelInfo === "object" && modelInfo !== null
+      ? (modelInfo as Record<string, unknown>)["model_id"]
+      : null;
+  const model = typeof modelId === "string" && modelId.length > 0 ? modelId : "auto";
+  const metadata = state["conversation_metadata"];
+  if (typeof metadata !== "object" || metadata === null) return [];
+  const turns = (metadata as Record<string, unknown>)["user_turn_metadatas"];
+  if (!Array.isArray(turns)) return [];
+
+  const records: UsageRecord[] = [];
+  for (const [index, value] of turns.entries()) {
+    if (typeof value !== "object" || value === null) continue;
+    const turn = value as Record<string, unknown>;
+    const timestampMs = parseTimestampMs(turn["end_timestamp"]);
+    if (timestampMs === null) continue;
+    const metering = turn["metering_usage"];
+    if (!Array.isArray(metering)) continue;
+    let credits = 0;
+    for (const item of metering) {
+      if (typeof item !== "object" || item === null) continue;
+      const entry = item as Record<string, unknown>;
+      const amount = entry["value"];
+      if (
+        entry["unit"] === "credit" &&
+        typeof amount === "number" &&
+        Number.isFinite(amount) &&
+        amount > 0
+      ) {
+        credits += amount;
+      }
+    }
+    if (credits === 0) continue;
+    records.push({
+      provider: "kiro",
+      timestampMs,
+      model,
+      sessionId,
+      totals: EMPTY_TOTALS,
+      credits,
+      // Kiro's public marginal price for add-on/overage credits. Subscription
+      // plan credits are prepaid, so this is an approximate usage value rather
+      // than the user's actual bill.
+      reportedCostUsd: credits * 0.04,
+      reportedCostSource: "creditEstimated",
+      dedupeKey: sessionId.length > 0 ? `kiro:${sessionId}:${index}` : null,
+    });
+  }
+  return records;
 }
 
 export { EMPTY_TOTALS };

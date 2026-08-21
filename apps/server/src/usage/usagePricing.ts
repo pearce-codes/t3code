@@ -120,9 +120,10 @@ export function priceUsage(
   model: string,
   totals: UsageTokenTotals,
   reportedCostUsd: number | null,
+  reportedCostSource: "providerReported" | "creditEstimated" | null = null,
 ): PricedUsage {
   if (reportedCostUsd !== null && Number.isFinite(reportedCostUsd)) {
-    return { costUsd: reportedCostUsd, costSource: "providerReported" };
+    return { costUsd: reportedCostUsd, costSource: reportedCostSource ?? "providerReported" };
   }
 
   const rate = lookupRate(table, model);

@@ -22,7 +22,9 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
       outputTokens: 50,
       reasoningTokens: 0,
     },
+    credits: 0,
     reportedCostUsd: null,
+    reportedCostSource: null,
     dedupeKey: "msg_1:",
     ...overrides,
   };
@@ -40,7 +42,18 @@ describe("scan cache round trip", () => {
   it("restores records unchanged", () => {
     const original = cacheWith([
       ["/a.jsonl", 100, [record(), record({ dedupeKey: "msg_2:", model: "claude-opus-5" })]],
-      ["/b.jsonl", 200, [record({ sessionId: "session-b", reportedCostUsd: 1.5 })]],
+      [
+        "/b.jsonl",
+        200,
+        [
+          record({
+            sessionId: "session-b",
+            reportedCostUsd: 1.5,
+            reportedCostSource: "creditEstimated",
+            credits: 2.25,
+          }),
+        ],
+      ],
     ]);
 
     const restored = decodeScanCache(JSON.parse(JSON.stringify(encodeScanCache(original))));

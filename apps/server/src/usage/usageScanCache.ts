@@ -18,9 +18,8 @@ import type { UsageProviderKind } from "@t3tools/contracts";
 
 import type { UsageRecord } from "./usageTranscripts.ts";
 
-// v2: Codex fork-copy suppression changed what a file parses to, so v1
-// entries would keep serving double-counted records forever.
-export const USAGE_SCAN_CACHE_VERSION = 2 as const;
+// v5 adds Kiro credits and cost provenance to every cached usage record.
+export const USAGE_SCAN_CACHE_VERSION = 5 as const;
 
 export interface CachedFile {
   readonly size: number;
@@ -47,6 +46,8 @@ type SerializedRecord = readonly [
   reasoningTokens: number,
   dedupeKey: string | null,
   reportedCostUsd: number | null,
+  credits: number,
+  reportedCostSource: "providerReported" | "creditEstimated" | null,
 ];
 
 interface SerializedFile {
@@ -96,6 +97,8 @@ export function encodeScanCache(cache: ScanCache): SerializedCache {
         record.totals.reasoningTokens,
         record.dedupeKey,
         record.reportedCostUsd,
+        record.credits,
+        record.reportedCostSource,
       ]),
     };
   }
@@ -134,7 +137,7 @@ export function decodeScanCache(document: unknown): ScanCache {
     if (typeof raw !== "object" || raw === null) continue;
     const entry = raw as Partial<SerializedFile>;
     if (typeof entry.s !== "number" || typeof entry.m !== "number") continue;
-    if (entry.p !== "claude" && entry.p !== "codex") continue;
+    if (entry.p !== "claude" && entry.p !== "codex" && entry.p !== "kiro") continue;
     if (!isRecordArray(entry.r)) continue;
 
     const provider: UsageProviderKind = entry.p;
@@ -144,7 +147,7 @@ export function decodeScanCache(document: unknown): ScanCache {
     // file would never be re-parsed, silently losing the dropped rows' usage.
     let corrupt = false;
     for (const row of entry.r) {
-      if (!isRecordArray(row) || row.length < 10) {
+      if (!isRecordArray(row) || row.length < 12) {
         corrupt = true;
         break;
       }
@@ -159,6 +162,8 @@ export function decodeScanCache(document: unknown): ScanCache {
         reasoning,
         dedupeKey,
         reportedCostUsd,
+        credits,
+        reportedCostSource,
       ] = row as SerializedRecord;
 
       const model = typeof modelIndex === "number" ? models[modelIndex] : undefined;
@@ -170,7 +175,11 @@ export function decodeScanCache(document: unknown): ScanCache {
         !Number.isFinite(cached) ||
         !Number.isFinite(cacheCreation) ||
         !Number.isFinite(output) ||
-        !Number.isFinite(reasoning)
+        !Number.isFinite(reasoning) ||
+        !Number.isFinite(credits) ||
+        (reportedCostSource !== null &&
+          reportedCostSource !== "providerReported" &&
+          reportedCostSource !== "creditEstimated")
       ) {
         corrupt = true;
         break;
@@ -188,7 +197,9 @@ export function decodeScanCache(document: unknown): ScanCache {
           outputTokens: output,
           reasoningTokens: reasoning,
         },
+        credits,
         reportedCostUsd: typeof reportedCostUsd === "number" ? reportedCostUsd : null,
+        reportedCostSource,
         dedupeKey: typeof dedupeKey === "string" ? dedupeKey : null,
       });
     }

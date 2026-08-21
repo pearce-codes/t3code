@@ -3,11 +3,22 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   enumerateHourStarts,
+  formatCredits,
   formatDateTimeShort,
   formatHourShort,
   formatRelativeHourShort,
   makeWindow,
 } from "./usageFormat.ts";
+
+describe("formatCredits", () => {
+  it("keeps sub-credit values precise and larger values compact", () => {
+    expect(formatCredits(0)).toBe("0 cr");
+    expect(formatCredits(0.4)).toBe("0.40 cr");
+    expect(formatCredits(1)).toBe("1 cr");
+    expect(formatCredits(3.25)).toBe("3.25 cr");
+    expect(formatCredits(1234.567)).toBe("1,234.57 cr");
+  });
+});
 
 describe("hourly usage formatting", () => {
   it("enumerates 24 fixed buckets across a rolling window", () => {

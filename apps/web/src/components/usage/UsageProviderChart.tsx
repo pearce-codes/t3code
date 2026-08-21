@@ -4,6 +4,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import type { DailyTotals, HourlyTotals } from "@t3tools/shared/usageMerge";
 import {
   formatDayShort,
+  formatCredits,
   formatHourShort,
   formatRelativeHourShort,
   formatTokens,
@@ -16,7 +17,7 @@ const VIEW_HEIGHT = 260;
 const TICK_COUNT = 4;
 const PLOT_TOP = 8;
 
-export type UsageChartMetric = "tokens" | "cost";
+export type UsageChartMetric = "tokens" | "cost" | "credits";
 
 interface UsageProviderChartProps {
   readonly days: readonly string[];
@@ -50,7 +51,9 @@ function valueFor(
 ): number {
   const entry = totals?.byProvider.get(provider);
   if (entry === undefined) return 0;
-  return metric === "tokens" ? entry.totalTokens : entry.costUsd;
+  if (metric === "tokens") return entry.totalTokens;
+  if (metric === "credits") return entry.credits;
+  return entry.costUsd;
 }
 
 function buildPeriodColumns(
@@ -268,7 +271,8 @@ export function UsageProviderChart({
     return { paths: ordered, ticks: tickValues, stepX: step, toY, series: columns };
   }, [byPeriod, metric, periods]);
 
-  const format = metric === "tokens" ? formatTokens : formatUsd;
+  const format =
+    metric === "tokens" ? formatTokens : metric === "credits" ? formatCredits : formatUsd;
 
   const handleMove = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -318,7 +322,7 @@ export function UsageProviderChart({
             viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
             preserveAspectRatio="none"
             role="img"
-            aria-label={`${resolution === "hour" ? "Hourly" : "Daily"} ${metric === "tokens" ? "processed tokens" : "cost"} by provider`}
+            aria-label={`${resolution === "hour" ? "Hourly" : "Daily"} ${metric === "tokens" ? "processed tokens" : metric} by provider`}
           >
             {ticks.map((tick) => {
               const y = toY(tick);

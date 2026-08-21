@@ -14,6 +14,11 @@ const CURRENCY = new Intl.NumberFormat("en-US", {
 });
 
 const INTEGER = new Intl.NumberFormat("en-US");
+const CREDITS = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
+const FRACTIONAL_CREDITS = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
 
 export function formatUsd(value: number): string {
   return CURRENCY.format(value);
@@ -21,6 +26,11 @@ export function formatUsd(value: number): string {
 
 export function formatCount(value: number): string {
   return INTEGER.format(Math.round(value));
+}
+
+/** Provider-native metering credits, compact but precise below one credit. */
+export function formatCredits(value: number): string {
+  return `${(value > 0 && value < 1 ? FRACTIONAL_CREDITS : CREDITS).format(value)} cr`;
 }
 
 /**

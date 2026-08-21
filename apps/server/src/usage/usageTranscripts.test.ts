@@ -4,6 +4,7 @@ import {
   initialCodexScanState,
   parseClaudeLine,
   parseCodexLine,
+  parseKiroSession,
   totalTokens,
 } from "./usageTranscripts.ts";
 
@@ -247,5 +248,66 @@ describe("totalTokens", () => {
         reasoningTokens: 25,
       }),
     ).toBe(100);
+  });
+});
+
+describe("parseKiroSession", () => {
+  it("extracts per-turn Kiro credits", () => {
+    const records = parseKiroSession(
+      JSON.stringify({
+        session_id: "kiro-session",
+        session_state: {
+          rts_model_state: {
+            model_info: { model_id: "claude-opus-4.6", context_window_tokens: 1000 },
+            context_usage_percentage: 10,
+          },
+          conversation_metadata: {
+            user_turn_metadatas: [
+              {
+                end_timestamp: "2026-08-15T13:33:57.146330Z",
+                metering_usage: [
+                  { value: 0.2, unit: "credit", unitPlural: "credits" },
+                  { value: 0.35, unit: "credit", unitPlural: "credits" },
+                ],
+                total_request_count: 1,
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      provider: "kiro",
+      model: "claude-opus-4.6",
+      sessionId: "kiro-session",
+      credits: 0.55,
+      reportedCostSource: "creditEstimated",
+      dedupeKey: "kiro:kiro-session:0",
+    });
+    expect(records[0]?.reportedCostUsd).toBeCloseTo(0.022, 9);
+    expect(records[0]?.totals).toEqual({
+      uncachedInputTokens: 0,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+    });
+  });
+
+  it("ignores malformed and unmetered turns", () => {
+    expect(parseKiroSession("not json")).toEqual([]);
+    expect(
+      parseKiroSession(
+        JSON.stringify({
+          session_state: {
+            conversation_metadata: {
+              user_turn_metadatas: [{ end_timestamp: "2026-08-15T13:33:57Z", metering_usage: [] }],
+            },
+          },
+        }),
+      ),
+    ).toEqual([]);
   });
 });
