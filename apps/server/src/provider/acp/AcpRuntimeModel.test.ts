@@ -336,6 +336,85 @@ describe("AcpRuntimeModel", () => {
     ]);
   });
 
+  it("projects ACP available command updates for provider composer menus", () => {
+    const result = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [
+          {
+            name: " /context ",
+            description: " Show context usage ",
+            input: { hint: " optional scope " },
+          },
+          {
+            name: "   ",
+            description: "ignored",
+          },
+        ],
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(result.events).toEqual([
+      {
+        _tag: "AvailableCommandsUpdated",
+        commands: [
+          {
+            name: "context",
+            description: "Show context usage",
+            inputHint: "optional scope",
+          },
+        ],
+        rawPayload: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [
+              {
+                name: " /context ",
+                description: " Show context usage ",
+                input: { hint: " optional scope " },
+              },
+              {
+                name: "   ",
+                description: "ignored",
+              },
+            ],
+          },
+        },
+      },
+    ]);
+  });
+
+  it("projects ACP usage updates into non-negative context snapshots", () => {
+    const result = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "usage_update",
+        used: 12_345.9,
+        size: 200_000.4,
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(result.events).toEqual([
+      {
+        _tag: "UsageUpdated",
+        usage: {
+          usedTokens: 12_345,
+          maxTokens: 200_000,
+        },
+        rawPayload: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "usage_update",
+            used: 12_345.9,
+            size: 200_000.4,
+          },
+        },
+      },
+    ]);
+  });
+
   it("keeps permission request parsing compatible with loose extension payloads", () => {
     const request = parsePermissionRequest({
       sessionId: "session-1",

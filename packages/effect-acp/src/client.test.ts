@@ -31,6 +31,11 @@ const ExtRequest = jsonRpcRequest("x/test", Schema.Struct({ hello: Schema.String
 const ExtResponse = jsonRpcResponse(Schema.Struct({ ok: Schema.Boolean }));
 const PromptRequest = jsonRpcRequest("session/prompt", AcpSchema.PromptRequest);
 const PromptResponse = jsonRpcResponse(AcpSchema.PromptResponse);
+const JsonRpcErrorResponse = Schema.Struct({
+  jsonrpc: Schema.Literal("2.0"),
+  id: Schema.Union([Schema.Number, Schema.String]),
+  error: AcpSchema.Error,
+});
 const decodePromptRequestLine = Schema.decodeEffect(Schema.fromJsonString(PromptRequest));
 const XAiPromptCompleteNotification = jsonRpcNotification(
   "_x.ai/session/prompt_complete",
@@ -484,6 +489,45 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
 
       yield* Fiber.join(initializeFiber);
       assert.deepEqual(yield* Fiber.join(extFiber), { ok: true });
+      yield* Scope.close(scope, Exit.void);
+    }),
+  );
+
+  it.effect("maps standard core JSON-RPC errors to AcpRequestError", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const scope = yield* Scope.make();
+      const acp = yield* AcpClient.make(stdio).pipe(Effect.provideService(Scope.Scope, scope));
+
+      const promptFiber = yield* acp.agent
+        .prompt({
+          sessionId: "kiro-session-1",
+          prompt: [{ type: "text", text: "review this change" }],
+        })
+        .pipe(Effect.forkScoped);
+
+      const outbound = yield* Queue.take(output);
+      const decodedPrompt = yield* decodePromptRequestLine(outbound);
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(JsonRpcErrorResponse, {
+          jsonrpc: "2.0",
+          id: decodedPrompt.id,
+          error: {
+            code: -32603,
+            message: "Internal error",
+          },
+        }),
+      );
+
+      const error = yield* Fiber.join(promptFiber).pipe(Effect.flip);
+      assert.instanceOf(error, AcpError.AcpRequestError);
+      assert.deepInclude(error, {
+        code: -32603,
+        errorMessage: "Internal error",
+        method: "session/prompt",
+        operation: "receive-response",
+      });
       yield* Scope.close(scope, Exit.void);
     }),
   );

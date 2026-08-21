@@ -74,6 +74,17 @@ export interface AcpPlanUpdate {
   }>;
 }
 
+export interface AcpAvailableCommand {
+  readonly name: string;
+  readonly description?: string;
+  readonly inputHint?: string;
+}
+
+export interface AcpTokenUsageUpdate {
+  readonly usedTokens: number;
+  readonly maxTokens?: number;
+}
+
 export interface AcpPermissionRequest {
   readonly kind: string | "unknown";
   readonly detail?: string;
@@ -101,6 +112,16 @@ export type AcpParsedSessionEvent =
   | {
       readonly _tag: "ToolCallUpdated";
       readonly toolCall: AcpToolCallState;
+      readonly rawPayload: unknown;
+    }
+  | {
+      readonly _tag: "AvailableCommandsUpdated";
+      readonly commands: ReadonlyArray<AcpAvailableCommand>;
+      readonly rawPayload: unknown;
+    }
+  | {
+      readonly _tag: "UsageUpdated";
+      readonly usage: AcpTokenUsageUpdate;
       readonly rawPayload: unknown;
     }
   | {
@@ -538,6 +559,42 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
           rawPayload: params,
         });
       }
+      break;
+    }
+    case "available_commands_update": {
+      const commands = upd.availableCommands.flatMap((command) => {
+        const name = command.name.trim().replace(/^\/+/, "");
+        if (!name) {
+          return [];
+        }
+        const description = command.description.trim() || undefined;
+        const inputHint = command.input?.hint.trim() || undefined;
+        return [
+          {
+            name,
+            ...(description ? { description } : {}),
+            ...(inputHint ? { inputHint } : {}),
+          } satisfies AcpAvailableCommand,
+        ];
+      });
+      events.push({
+        _tag: "AvailableCommandsUpdated",
+        commands,
+        rawPayload: params,
+      });
+      break;
+    }
+    case "usage_update": {
+      const usedTokens = Math.max(0, Math.trunc(upd.used));
+      const maxTokens = Math.max(0, Math.trunc(upd.size));
+      events.push({
+        _tag: "UsageUpdated",
+        usage: {
+          usedTokens,
+          ...(maxTokens > 0 ? { maxTokens } : {}),
+        },
+        rawPayload: params,
+      });
       break;
     }
     case "tool_call": {

@@ -15,8 +15,11 @@ import {
   type ProviderOptionSelection,
   type ProviderRuntimeEvent,
   type ProviderSession,
+  type ServerProviderSlashCommand,
+  type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
   RuntimeRequestId,
+  RuntimeTaskId,
   type RuntimeMode,
   type ThreadId,
   TurnId,
@@ -55,6 +58,7 @@ import {
   makeAcpPlanUpdatedEvent,
   makeAcpRequestOpenedEvent,
   makeAcpRequestResolvedEvent,
+  makeAcpTokenUsageUpdatedEvent,
   makeAcpToolCallEvent,
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
@@ -64,10 +68,15 @@ import {
   parsePermissionRequest,
 } from "../acp/AcpRuntimeModel.ts";
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
-import { applyKiroAcpModelSelection, makeKiroAcpRuntime } from "../acp/KiroAcpSupport.ts";
+import {
+  applyKiroAcpModelSelection,
+  canApplyKiroEffortToRunningSession,
+  makeKiroAcpRuntime,
+  selectedKiroEffort,
+} from "../acp/KiroAcpSupport.ts";
 import { type KiroAdapterShape } from "../Services/KiroAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
-import { resolveKiroAcpBaseModelId } from "./KiroProvider.ts";
+import { kiroSlashCommandsFromAcp, resolveKiroAcpBaseModelId } from "./KiroProvider.ts";
 
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
@@ -76,6 +85,96 @@ const KIRO_RESUME_VERSION = 1 as const;
 const ACP_PLAN_MODE_ALIASES = ["plan", "architect"];
 const ACP_IMPLEMENT_MODE_ALIASES = ["code", "agent", "default", "chat", "implement"];
 const ACP_APPROVAL_MODE_ALIASES = ["ask"];
+const KIRO_SUBAGENT_LIST_METHOD = "_kiro.dev/subagent/list_update";
+const KIRO_SUBAGENT_ACTIVITY_METHOD = "_kiro.dev/session/update";
+const KIRO_NATIVE_RUNNING_STATUSES = new Set([
+  "",
+  "working",
+  "running",
+  "pending",
+  "queued",
+  "in_progress",
+  "waiting",
+  "paused",
+  "idle",
+]);
+const KIRO_NATIVE_TERMINAL_STATUSES = new Set([
+  "completed",
+  "succeeded",
+  "done",
+  "terminated",
+  "failed",
+  "error",
+  "stopped",
+  "cancelled",
+  "canceled",
+  "interrupted",
+]);
+
+const NullableString = Schema.Union([Schema.String, Schema.Null]);
+const KiroNativeSubagentStatus = Schema.Struct({
+  type: Schema.optionalKey(NullableString),
+  message: Schema.optionalKey(NullableString),
+});
+const KiroNativeSubagent = Schema.Struct({
+  sessionId: Schema.String,
+  sessionName: Schema.optionalKey(NullableString),
+  role: Schema.optionalKey(NullableString),
+  agentName: Schema.optionalKey(NullableString),
+  initialQuery: Schema.optionalKey(NullableString),
+  status: Schema.optionalKey(Schema.Union([KiroNativeSubagentStatus, Schema.Null])),
+});
+const KiroNativeSubagentListNotification = Schema.Struct({
+  subagents: Schema.Array(KiroNativeSubagent),
+});
+const KiroNativeSubagentActivityNotification = Schema.Struct({
+  sessionId: Schema.String,
+  update: Schema.Struct({
+    sessionUpdate: Schema.String,
+    toolCallId: Schema.optionalKey(NullableString),
+    title: Schema.optionalKey(NullableString),
+    text: Schema.optionalKey(NullableString),
+    content: Schema.optionalKey(
+      Schema.Union([
+        Schema.Struct({
+          type: Schema.optionalKey(NullableString),
+          text: Schema.optionalKey(NullableString),
+          is_thinking: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
+        }),
+        Schema.Null,
+      ]),
+    ),
+  }),
+});
+
+type KiroNativeSubagentRecord = typeof KiroNativeSubagent.Type;
+
+interface KiroNativeSubagentState {
+  readonly taskId: RuntimeTaskId;
+  readonly sessionId: string;
+  description: string;
+  role: string | undefined;
+  statusType: string;
+  statusMessage: string;
+  completed: boolean;
+}
+
+export type KiroNativeSubagentLifecycleAction =
+  | {
+      readonly type: "started";
+      readonly state: KiroNativeSubagentState;
+    }
+  | {
+      readonly type: "progress";
+      readonly state: KiroNativeSubagentState;
+      readonly summary: string;
+    }
+  | {
+      readonly type: "completed";
+      readonly state: KiroNativeSubagentState;
+      readonly status: "completed" | "failed" | "stopped";
+      readonly summary?: string;
+    };
 
 function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
   const result = encodeUnknownJsonStringExit(input);
@@ -97,6 +196,11 @@ export interface KiroAdapterLiveOptions {
    * so a mid-suite binaryPath change takes effect on the next session spawn.
    */
   readonly resolveSettings?: Effect.Effect<KiroSettings>;
+  /** Publishes the latest ACP command catalog into this instance's provider snapshot. */
+  readonly onSlashCommandsUpdated?: (input: {
+    readonly threadId: ThreadId;
+    readonly commands: ReadonlyArray<ServerProviderSlashCommand>;
+  }) => Effect.Effect<void, never>;
 }
 
 interface PendingApproval {
@@ -119,10 +223,14 @@ interface KiroSessionContext {
   readonly turns: Array<{ id: TurnId; items: Array<unknown> }>;
   lastPlanFingerprint: string | undefined;
   activeTurnId: TurnId | undefined;
-  // Resolves when the in-flight prompt turn settles (any stop reason). Used by
-  // steerTurn to safely await a cancelled turn before resending, since ACP
-  // prompts are not serialized.
+  // Resolves only after the in-flight turn has emitted terminal task/turn state.
+  // steerTurn awaits it before resending because ACP prompts are not serialized.
   activeTurnGate: Deferred.Deferred<void> | undefined;
+  lastMaxTokens: number | undefined;
+  lastUsedTokens: number | undefined;
+  currentEffort: string | undefined;
+  readonly nativeSubagents: Map<string, KiroNativeSubagentState>;
+  readonly nativeToolOwners: Map<string, string>;
   stopped: boolean;
 }
 
@@ -154,6 +262,127 @@ function settlePendingUserInputsAsEmptyAnswers(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function trimmedNativeText(value: string | null | undefined, maxLength = 2_000): string {
+  return value?.trim().slice(0, maxLength) ?? "";
+}
+
+function terminalKiroTaskStatus(statusType: string): "completed" | "failed" | "stopped" {
+  switch (statusType) {
+    case "failed":
+    case "error":
+      return "failed";
+    case "stopped":
+    case "cancelled":
+    case "canceled":
+    case "interrupted":
+      return "stopped";
+    default:
+      return "completed";
+  }
+}
+
+export function reconcileKiroNativeSubagents(
+  states: Map<string, KiroNativeSubagentState>,
+  records: ReadonlyArray<KiroNativeSubagentRecord>,
+): ReadonlyArray<KiroNativeSubagentLifecycleAction> {
+  const actions: Array<KiroNativeSubagentLifecycleAction> = [];
+  for (const record of records) {
+    const sessionId = trimmedNativeText(record.sessionId);
+    if (!sessionId) continue;
+    const description =
+      trimmedNativeText(record.initialQuery) || trimmedNativeText(record.sessionName);
+    const role = trimmedNativeText(record.role) || trimmedNativeText(record.agentName) || undefined;
+    const statusType = trimmedNativeText(record.status?.type).toLowerCase();
+    const statusMessage = trimmedNativeText(record.status?.message);
+    let state = states.get(sessionId);
+    if (!state) {
+      if (!description) continue;
+      state = {
+        taskId: RuntimeTaskId.make(`kiro-native:${sessionId}`),
+        sessionId,
+        description,
+        role,
+        statusType: "",
+        statusMessage: "",
+        completed: false,
+      };
+      states.set(sessionId, state);
+      actions.push({ type: "started", state });
+    } else {
+      if (description) state.description = description;
+      if (role) state.role = role;
+    }
+    if (state.completed) continue;
+
+    if (statusType && KIRO_NATIVE_TERMINAL_STATUSES.has(statusType)) {
+      state.statusType = statusType;
+      state.statusMessage = statusMessage;
+      state.completed = true;
+      actions.push({
+        type: "completed",
+        state,
+        status: terminalKiroTaskStatus(statusType),
+        ...(statusMessage ? { summary: statusMessage } : {}),
+      });
+      continue;
+    }
+
+    const statusChanged = statusType !== state.statusType || statusMessage !== state.statusMessage;
+    state.statusType = statusType;
+    state.statusMessage = statusMessage;
+    const progressSummary =
+      statusMessage ||
+      (statusType && !KIRO_NATIVE_RUNNING_STATUSES.has(statusType) ? statusType : "");
+    if (statusChanged && progressSummary && progressSummary.toLowerCase() !== "running") {
+      actions.push({ type: "progress", state, summary: progressSummary });
+    }
+  }
+  return actions;
+}
+
+export function completeOpenKiroNativeSubagents(
+  states: ReadonlyMap<string, KiroNativeSubagentState>,
+  status: "completed" | "failed" | "stopped",
+): ReadonlyArray<KiroNativeSubagentLifecycleAction> {
+  const actions: Array<KiroNativeSubagentLifecycleAction> = [];
+  for (const state of states.values()) {
+    if (state.completed) continue;
+    state.completed = true;
+    actions.push({
+      type: "completed",
+      state,
+      status,
+      summary:
+        status === "stopped"
+          ? "Kiro subagent stopped with its parent turn."
+          : status === "failed"
+            ? "Kiro subagent failed with its parent turn."
+            : "Kiro subagent turn completed.",
+    });
+  }
+  return actions;
+}
+
+export function finalizeKiroNativeTurn<E, R>(input: {
+  readonly states: ReadonlyMap<string, KiroNativeSubagentState>;
+  readonly status: "completed" | "failed" | "stopped";
+  readonly drainEvents: Effect.Effect<void, never>;
+  readonly emit: (action: KiroNativeSubagentLifecycleAction) => Effect.Effect<void, E, R>;
+  readonly gate: Deferred.Deferred<void>;
+  readonly clearGate: () => void;
+}): Effect.Effect<void, E, R> {
+  return Effect.gen(function* () {
+    yield* input.drainEvents;
+    for (const action of completeOpenKiroNativeSubagents(input.states, input.status)) {
+      yield* input.emit(action);
+    }
+  }).pipe(
+    Effect.ensuring(
+      Deferred.succeed(input.gate, undefined).pipe(Effect.andThen(Effect.sync(input.clearGate))),
+    ),
+  );
 }
 
 function parseKiroResume(raw: unknown): { sessionId: string } | undefined {
@@ -289,6 +518,35 @@ function selectAutoApprovedPermissionOption(
   return undefined;
 }
 
+function nonNegativeTokenCount(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.trunc(value))
+    : undefined;
+}
+
+export function threadTokenUsageFromAcpPromptUsage(
+  usage: EffectAcpSchema.Usage | null | undefined,
+  maxTokens?: number,
+  activeUsedTokens?: number,
+): ThreadTokenUsageSnapshot | undefined {
+  if (!usage) return undefined;
+  const totalProcessedTokens = nonNegativeTokenCount(usage.totalTokens) ?? 0;
+  const usedTokens = nonNegativeTokenCount(activeUsedTokens) ?? totalProcessedTokens;
+  const inputTokens = nonNegativeTokenCount(usage.inputTokens) ?? 0;
+  const outputTokens = nonNegativeTokenCount(usage.outputTokens) ?? 0;
+  const cachedInputTokens = nonNegativeTokenCount(usage.cachedReadTokens);
+  const reasoningOutputTokens = nonNegativeTokenCount(usage.thoughtTokens);
+  return {
+    usedTokens,
+    totalProcessedTokens,
+    ...(maxTokens && maxTokens > 0 ? { maxTokens } : {}),
+    inputTokens,
+    outputTokens,
+    ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
+  };
+}
+
 export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapterLiveOptions) {
   return Effect.gen(function* () {
     const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("kiro");
@@ -339,6 +597,104 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
 
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
       PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
+
+    const nativeTaskLinkage = (state: KiroNativeSubagentState) => ({
+      taskType: "subagent" as const,
+      title: state.description,
+      ...(state.role ? { role: state.role } : {}),
+      timelineBypass: true,
+    });
+
+    const emitKiroNativeLifecycleAction = Effect.fn("emitKiroNativeLifecycleAction")(function* (
+      ctx: KiroSessionContext,
+      action: KiroNativeSubagentLifecycleAction,
+      method: string,
+      rawPayload: unknown,
+    ) {
+      const base = {
+        ...(yield* makeEventStamp()),
+        provider: PROVIDER,
+        threadId: ctx.threadId,
+        turnId: ctx.activeTurnId,
+        raw: {
+          source: "acp.kiro.extension" as const,
+          method,
+          payload: rawPayload,
+        },
+      };
+      const linkage = nativeTaskLinkage(action.state);
+      switch (action.type) {
+        case "started":
+          yield* offerRuntimeEvent({
+            ...base,
+            type: "task.started",
+            payload: {
+              taskId: action.state.taskId,
+              description: action.state.description,
+              ...linkage,
+            },
+          });
+          return;
+        case "progress":
+          yield* offerRuntimeEvent({
+            ...base,
+            type: "task.progress",
+            payload: {
+              taskId: action.state.taskId,
+              description: action.state.description,
+              summary: action.summary,
+              status: "running",
+              ...linkage,
+            },
+          });
+          return;
+        case "completed":
+          yield* offerRuntimeEvent({
+            ...base,
+            type: "task.completed",
+            payload: {
+              taskId: action.state.taskId,
+              status: action.status,
+              ...(action.summary ? { summary: action.summary } : {}),
+              ...linkage,
+            },
+          });
+          return;
+      }
+    });
+
+    const emitKiroNativeProgress = Effect.fn("emitKiroNativeProgress")(function* (
+      ctx: KiroSessionContext,
+      state: KiroNativeSubagentState,
+      input: { readonly summary?: string; readonly lastToolName?: string },
+      method: string,
+      rawPayload: unknown,
+      source: "acp.jsonrpc" | "acp.kiro.extension" = "acp.kiro.extension",
+    ) {
+      const summary = trimmedNativeText(input.summary);
+      const lastToolName = trimmedNativeText(input.lastToolName, 200);
+      if (!summary && !lastToolName) return;
+      yield* offerRuntimeEvent({
+        type: "task.progress",
+        ...(yield* makeEventStamp()),
+        provider: PROVIDER,
+        threadId: ctx.threadId,
+        turnId: ctx.activeTurnId,
+        payload: {
+          taskId: state.taskId,
+          description: state.description,
+          ...(summary ? { summary } : {}),
+          ...(lastToolName ? { lastToolName } : {}),
+          status: "running",
+          ...nativeTaskLinkage(state),
+        },
+        raw: {
+          source,
+          method,
+          payload: rawPayload,
+        },
+      });
+    });
 
     const getThreadSemaphore = (threadId: string) =>
       SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
@@ -441,8 +797,16 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
         if (ctx.notificationFiber) {
           yield* Fiber.interrupt(ctx.notificationFiber);
         }
+        for (const action of completeOpenKiroNativeSubagents(ctx.nativeSubagents, "stopped")) {
+          yield* emitKiroNativeLifecycleAction(ctx, action, "session/stop", {
+            reason: "session stopped",
+          });
+        }
         yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
         sessions.delete(ctx.threadId);
+        if (options?.onSlashCommandsUpdated) {
+          yield* options.onSlashCommandsUpdated({ threadId: ctx.threadId, commands: [] });
+        }
         yield* offerRuntimeEvent({
           type: "session.exited",
           ...(yield* makeEventStamp()),
@@ -593,6 +957,80 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
                 }),
               ),
             );
+            yield* acp.handleExtNotification(
+              KIRO_SUBAGENT_LIST_METHOD,
+              KiroNativeSubagentListNotification,
+              (params) =>
+                mapAcpCallbackFailure(
+                  Effect.gen(function* () {
+                    if (!ctx || ctx.activeTurnGate === undefined) return;
+                    yield* logNative(
+                      input.threadId,
+                      KIRO_SUBAGENT_LIST_METHOD,
+                      params,
+                      "acp.jsonrpc",
+                    );
+                    const actions = reconcileKiroNativeSubagents(
+                      ctx.nativeSubagents,
+                      params.subagents,
+                    );
+                    for (const action of actions) {
+                      yield* emitKiroNativeLifecycleAction(
+                        ctx,
+                        action,
+                        KIRO_SUBAGENT_LIST_METHOD,
+                        params,
+                      );
+                    }
+                  }),
+                ),
+            );
+            yield* acp.handleExtNotification(
+              KIRO_SUBAGENT_ACTIVITY_METHOD,
+              KiroNativeSubagentActivityNotification,
+              (params) =>
+                mapAcpCallbackFailure(
+                  Effect.gen(function* () {
+                    if (!ctx || ctx.activeTurnGate === undefined) return;
+                    yield* logNative(
+                      input.threadId,
+                      KIRO_SUBAGENT_ACTIVITY_METHOD,
+                      params,
+                      "acp.jsonrpc",
+                    );
+                    const sessionId = trimmedNativeText(params.sessionId);
+                    const state = ctx.nativeSubagents.get(sessionId);
+                    if (!state || state.completed) return;
+                    const toolCallId = trimmedNativeText(params.update.toolCallId);
+                    const title = trimmedNativeText(params.update.title, 200);
+                    if (toolCallId) {
+                      ctx.nativeToolOwners.set(toolCallId, sessionId);
+                    }
+                    const content = params.update.content;
+                    const contentText =
+                      content && content.type === "text" && content.is_thinking !== true
+                        ? trimmedNativeText(content.text)
+                        : "";
+                    const flatText = trimmedNativeText(params.update.text);
+                    const streamedText =
+                      params.update.sessionUpdate === "agent_message_chunk"
+                        ? contentText || flatText
+                        : "";
+                    if (title || streamedText) {
+                      yield* emitKiroNativeProgress(
+                        ctx,
+                        state,
+                        {
+                          ...(streamedText ? { summary: streamedText } : {}),
+                          ...(title ? { lastToolName: title } : {}),
+                        },
+                        KIRO_SUBAGENT_ACTIVITY_METHOD,
+                        params,
+                      );
+                    }
+                  }),
+                ),
+            );
             return yield* acp.start();
           }).pipe(
             Effect.mapError((error) =>
@@ -638,6 +1076,11 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
             lastPlanFingerprint: undefined,
             activeTurnId: undefined,
             activeTurnGate: undefined,
+            lastMaxTokens: undefined,
+            lastUsedTokens: undefined,
+            currentEffort: selectedKiroEffort(kiroModelSelection?.options),
+            nativeSubagents: new Map(),
+            nativeToolOwners: new Map(),
             stopped: false,
           };
 
@@ -645,6 +1088,9 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
             Stream.mapEffect(acp.getEvents(), (event) =>
               Effect.gen(function* () {
                 switch (event._tag) {
+                  case "EventStreamBarrier":
+                    yield* Deferred.succeed(event.acknowledge, undefined);
+                    return;
                   case "ModeChanged":
                     return;
                   case "AssistantItemStarted":
@@ -686,6 +1132,43 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
                       "session/update",
                     );
                     return;
+                  case "AvailableCommandsUpdated":
+                    yield* logNative(
+                      ctx.threadId,
+                      "session/update",
+                      event.rawPayload,
+                      "acp.jsonrpc",
+                    );
+                    if (options?.onSlashCommandsUpdated) {
+                      yield* options.onSlashCommandsUpdated({
+                        threadId: ctx.threadId,
+                        commands: kiroSlashCommandsFromAcp(event.commands),
+                      });
+                    }
+                    return;
+                  case "UsageUpdated":
+                    yield* logNative(
+                      ctx.threadId,
+                      "session/update",
+                      event.rawPayload,
+                      "acp.jsonrpc",
+                    );
+                    ctx.lastMaxTokens = event.usage.maxTokens ?? ctx.lastMaxTokens;
+                    ctx.lastUsedTokens = event.usage.usedTokens;
+                    yield* offerRuntimeEvent(
+                      makeAcpTokenUsageUpdatedEvent({
+                        stamp: yield* makeEventStamp(),
+                        provider: PROVIDER,
+                        threadId: ctx.threadId,
+                        turnId: ctx.activeTurnId,
+                        usage: {
+                          usedTokens: event.usage.usedTokens,
+                          ...(ctx.lastMaxTokens ? { maxTokens: ctx.lastMaxTokens } : {}),
+                        },
+                        rawPayload: event.rawPayload,
+                      }),
+                    );
+                    return;
                   case "ToolCallUpdated":
                     yield* logNative(
                       ctx.threadId,
@@ -703,6 +1186,29 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
                         rawPayload: event.rawPayload,
                       }),
                     );
+                    const nativeSessionId = ctx.nativeToolOwners.get(event.toolCall.toolCallId);
+                    const nativeState = nativeSessionId
+                      ? ctx.nativeSubagents.get(nativeSessionId)
+                      : undefined;
+                    if (nativeState && !nativeState.completed) {
+                      yield* emitKiroNativeProgress(
+                        ctx,
+                        nativeState,
+                        {
+                          ...(event.toolCall.detail ? { summary: event.toolCall.detail } : {}),
+                          ...(event.toolCall.title ? { lastToolName: event.toolCall.title } : {}),
+                        },
+                        "session/update",
+                        event.rawPayload,
+                        "acp.jsonrpc",
+                      );
+                    }
+                    if (
+                      event.toolCall.status === "completed" ||
+                      event.toolCall.status === "failed"
+                    ) {
+                      ctx.nativeToolOwners.delete(event.toolCall.toolCallId);
+                    }
                     return;
                   case "ContentDelta":
                     yield* logNative(
@@ -771,6 +1277,18 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
           input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
         const model = turnModelSelection?.model ?? ctx.session.model;
         const resolvedModel = resolveKiroAcpBaseModelId(model);
+        const requestedEffort = selectedKiroEffort(turnModelSelection?.options);
+        if (requestedEffort !== undefined && requestedEffort !== ctx.currentEffort) {
+          const configOptions = yield* ctx.acp.getConfigOptions;
+          if (!canApplyKiroEffortToRunningSession(configOptions, requestedEffort)) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "sendTurn",
+              issue:
+                "This Kiro session cannot change Effort after startup. Start a new thread to use the selected Effort.",
+            });
+          }
+        }
         yield* applyRequestedSessionConfiguration({
           runtime: ctx.acp,
           runtimeMode: ctx.session.runtimeMode,
@@ -785,6 +1303,11 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
           mapError: ({ cause, method }) =>
             mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
         });
+        if (requestedEffort !== undefined) {
+          ctx.currentEffort = requestedEffort;
+        }
+        ctx.nativeSubagents.clear();
+        ctx.nativeToolOwners.clear();
         ctx.activeTurnId = turnId;
         ctx.lastPlanFingerprint = undefined;
         const turnGate = yield* Deferred.make<void>();
@@ -795,105 +1318,145 @@ export function makeKiroAdapter(kiroSettings: KiroSettings, options?: KiroAdapte
           updatedAt: yield* nowIso,
         };
 
-        yield* offerRuntimeEvent({
-          type: "turn.started",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: input.threadId,
-          turnId,
-          payload: { model: resolvedModel },
-        });
+        return yield* Effect.gen(function* () {
+          yield* offerRuntimeEvent({
+            type: "turn.started",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: input.threadId,
+            turnId,
+            payload: { model: resolvedModel },
+          });
 
-        const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
-        if (input.input?.trim()) {
-          promptParts.push({ type: "text", text: input.input.trim() });
-        }
-        if (input.attachments && input.attachments.length > 0) {
-          for (const attachment of input.attachments) {
-            const attachmentPath = resolveAttachmentPath({
-              attachmentsDir: serverConfig.attachmentsDir,
-              attachment,
-            });
-            if (!attachmentPath) {
-              return yield* new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "session/prompt",
-                detail: `Invalid attachment id '${attachment.id}'.`,
+          const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
+          if (input.input?.trim()) {
+            promptParts.push({ type: "text", text: input.input.trim() });
+          }
+          if (input.attachments && input.attachments.length > 0) {
+            for (const attachment of input.attachments) {
+              const attachmentPath = resolveAttachmentPath({
+                attachmentsDir: serverConfig.attachmentsDir,
+                attachment,
+              });
+              if (!attachmentPath) {
+                return yield* new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "session/prompt",
+                  detail: `Invalid attachment id '${attachment.id}'.`,
+                });
+              }
+              const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapterRequestError({
+                      provider: PROVIDER,
+                      method: "session/prompt",
+                      detail: cause.message,
+                      cause,
+                    }),
+                ),
+              );
+              promptParts.push({
+                type: "image",
+                data: Buffer.from(bytes).toString("base64"),
+                mimeType: attachment.mimeType,
               });
             }
-            const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAdapterRequestError({
-                    provider: PROVIDER,
-                    method: "session/prompt",
-                    detail: cause.message,
-                    cause,
-                  }),
-              ),
-            );
-            promptParts.push({
-              type: "image",
-              data: Buffer.from(bytes).toString("base64"),
-              mimeType: attachment.mimeType,
+          }
+
+          if (promptParts.length === 0) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "sendTurn",
+              issue: "Turn requires non-empty text or attachments.",
             });
           }
-        }
 
-        if (promptParts.length === 0) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "sendTurn",
-            issue: "Turn requires non-empty text or attachments.",
-          });
-        }
-
-        const result = yield* ctx.acp
-          .prompt({
-            prompt: promptParts,
-          })
-          .pipe(
-            Effect.mapError((error) =>
-              mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
-            ),
-            Effect.ensuring(
-              Deferred.succeed(turnGate, undefined).pipe(
-                Effect.andThen(
-                  Effect.sync(() => {
-                    if (ctx.activeTurnGate === turnGate) {
-                      ctx.activeTurnGate = undefined;
-                    }
-                  }),
-                ),
+          const result = yield* ctx.acp
+            .prompt({ prompt: promptParts })
+            .pipe(
+              Effect.mapError((error) =>
+                mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
               ),
-            ),
+            );
+
+          yield* ctx.acp.drainEvents;
+          for (const action of completeOpenKiroNativeSubagents(
+            ctx.nativeSubagents,
+            result.stopReason === "cancelled" ? "stopped" : "completed",
+          )) {
+            yield* emitKiroNativeLifecycleAction(ctx, action, "session/prompt", result);
+          }
+
+          const promptUsage = threadTokenUsageFromAcpPromptUsage(
+            result.usage,
+            ctx.lastMaxTokens,
+            ctx.lastUsedTokens,
           );
+          if (promptUsage) {
+            yield* offerRuntimeEvent(
+              makeAcpTokenUsageUpdatedEvent({
+                stamp: yield* makeEventStamp(),
+                provider: PROVIDER,
+                threadId: ctx.threadId,
+                turnId,
+                usage: promptUsage,
+                rawPayload: result,
+                method: "session/prompt",
+              }),
+            );
+          }
 
-        ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
-        ctx.session = {
-          ...ctx.session,
-          activeTurnId: turnId,
-          updatedAt: yield* nowIso,
-          model: resolvedModel,
-        };
+          ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
+          ctx.session = {
+            ...ctx.session,
+            activeTurnId: turnId,
+            updatedAt: yield* nowIso,
+            model: resolvedModel,
+          };
 
-        yield* offerRuntimeEvent({
-          type: "turn.completed",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: input.threadId,
-          turnId,
-          payload: {
-            state: result.stopReason === "cancelled" ? "cancelled" : "completed",
-            stopReason: result.stopReason ?? null,
-          },
-        });
+          yield* offerRuntimeEvent({
+            type: "turn.completed",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: input.threadId,
+            turnId,
+            payload: {
+              state: result.stopReason === "cancelled" ? "cancelled" : "completed",
+              stopReason: result.stopReason ?? null,
+            },
+          });
 
-        return {
-          threadId: input.threadId,
-          turnId,
-          resumeCursor: ctx.session.resumeCursor,
-        };
+          return {
+            threadId: input.threadId,
+            turnId,
+            resumeCursor: ctx.session.resumeCursor,
+          };
+        }).pipe(
+          Effect.onExit((exit) => {
+            const settlementStatus = ctx.stopped
+              ? "stopped"
+              : Exit.isFailure(exit)
+                ? "failed"
+                : "completed";
+            return finalizeKiroNativeTurn({
+              states: ctx.nativeSubagents,
+              status: settlementStatus,
+              drainEvents: Effect.ignore(ctx.acp.drainEvents),
+              emit: (action) => emitKiroNativeLifecycleAction(ctx, action, "session/prompt", exit),
+              gate: turnGate,
+              clearGate: () => {
+                if (ctx.activeTurnGate === turnGate) {
+                  ctx.activeTurnGate = undefined;
+                }
+              },
+            }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logError("Failed to finalize Kiro turn lifecycle.", { cause }),
+              ),
+            );
+          }),
+        );
       });
 
     const steerTurn: KiroAdapterShape["steerTurn"] = (input) =>

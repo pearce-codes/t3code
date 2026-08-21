@@ -600,6 +600,74 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         ]);
       });
 
+      it("adds Effort before Agent on retained Kiro models", () => {
+        const previousProvider = {
+          instanceId: ProviderInstanceId.make("kiro"),
+          driver: ProviderDriverKind.make("kiro"),
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "unknown" },
+          checkedAt: "2026-08-21T00:00:00.000Z",
+          version: "2.19.0",
+          models: [
+            {
+              slug: "claude-sonnet-5",
+              name: "Claude Sonnet 5",
+              isCustom: false,
+              capabilities: createModelCapabilities({
+                optionDescriptors: [
+                  selectDescriptor("agent", "Agent", [
+                    { id: "kiro_default", label: "kiro_default", isDefault: true },
+                  ]),
+                ],
+              }),
+            },
+          ],
+          slashCommands: [],
+          skills: [],
+        } as const satisfies ServerProvider;
+        const refreshedProvider = {
+          ...previousProvider,
+          checkedAt: "2026-08-21T00:01:00.000Z",
+          models: [
+            {
+              slug: "auto",
+              name: "Auto",
+              isCustom: false,
+              capabilities: createModelCapabilities({
+                optionDescriptors: [
+                  selectDescriptor("effort", "Effort", [
+                    { id: "low", label: "Low" },
+                    { id: "max", label: "Max" },
+                  ]),
+                ],
+              }),
+            },
+          ],
+        } satisfies ServerProvider;
+
+        const merged = mergeProviderSnapshot(previousProvider, refreshedProvider);
+        assert.deepStrictEqual(
+          merged.models.map((model) => model.slug),
+          ["auto", "claude-sonnet-5"],
+        );
+        assert.deepStrictEqual(
+          merged.models.map((model) =>
+            model.capabilities?.optionDescriptors?.map((descriptor) => descriptor.id),
+          ),
+          [["effort"], ["effort", "agent"]],
+        );
+        const effort = merged.models[1]?.capabilities?.optionDescriptors?.[0];
+        assert.strictEqual(effort?.type, "select");
+        if (effort?.type === "select") {
+          assert.deepStrictEqual(
+            effort.options.map((option) => option.id),
+            ["low", "medium", "high", "xhigh", "max"],
+          );
+        }
+      });
+
       it("drops stale OpenCode models missing from a successful refresh", () => {
         const previousProvider = {
           instanceId: ProviderInstanceId.make("opencode"),

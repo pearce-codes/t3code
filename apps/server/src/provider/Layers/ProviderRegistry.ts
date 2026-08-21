@@ -54,6 +54,7 @@ import {
 import type { ProviderInstance } from "../ProviderDriver.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 import type { ProviderSnapshotSource } from "../builtInProviderCatalog.ts";
+import { withKiroEffortCapabilities } from "./KiroProvider.ts";
 
 const loadProviders = (
   providerSources: ReadonlyArray<ProviderSnapshotSource>,
@@ -123,16 +124,23 @@ const mergeProviderModels = (
     : mergedModels;
 };
 
+export const normalizeProviderSnapshot = (provider: ServerProvider): ServerProvider =>
+  provider.driver === ProviderDriverKind.make("kiro")
+    ? { ...provider, models: withKiroEffortCapabilities(provider.models) }
+    : provider;
+
 export const mergeProviderSnapshot = (
   previousProvider: ServerProvider | undefined,
   nextProvider: ServerProvider,
 ): ServerProvider =>
-  !previousProvider
-    ? nextProvider
-    : {
-        ...nextProvider,
-        models: mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models),
-      };
+  normalizeProviderSnapshot(
+    !previousProvider
+      ? nextProvider
+      : {
+          ...nextProvider,
+          models: mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models),
+        },
+  );
 
 export const mergeProviderSnapshots = (
   previousProviders: ReadonlyArray<ServerProvider>,
@@ -276,7 +284,7 @@ export const ProviderRegistryLive = Layer.effect(
                   cachedDriver: cachedProvider.driver ?? null,
                 }).pipe(Effect.as(undefined as ServerProvider | undefined));
               }
-              return Effect.succeed(hydrateCachedProvider(correlation));
+              return Effect.succeed(normalizeProviderSnapshot(hydrateCachedProvider(correlation)));
             }),
           );
         }),
@@ -367,7 +375,8 @@ export const ProviderRegistryLive = Layer.effect(
           );
           const updatedKeys = new Set<ProviderInstanceId>();
 
-          for (const provider of nextProvidersWithUpdateState) {
+          for (const rawProvider of nextProvidersWithUpdateState) {
+            const provider = normalizeProviderSnapshot(rawProvider);
             const key = snapshotInstanceKey(provider);
             updatedKeys.add(key);
             mergedProviders.set(
