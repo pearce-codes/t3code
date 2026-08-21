@@ -122,6 +122,16 @@ npx t3 serve --tailscale-serve --tailscale-serve-port 8443
 Once paired, add projects normally: open the Command Palette and choose **Add Project**, then pick
 the environment the project lives on. Every saved environment is offered, not only the local one.
 
+### Open Remote Files in a Local Editor
+
+On web and desktop, **Open in editor** actions for a remote environment—including the action in a
+chat file link's context menu—open the remote path in a compatible editor on the viewing machine.
+The editor connects to the environment over SSH, so your local SSH configuration and keys must be
+able to reach the advertised host. VS Code is available from a browser; the desktop app can also
+offer other installed editors that support remote links. If the environment does not advertise a
+reachable SSH host, the action reports that no SSH route is available instead of opening the path
+on the server machine.
+
 ### Option 3: Desktop-Managed SSH Launch
 
 Use this when you want the desktop app to start or reuse T3 Code on another machine over SSH.
