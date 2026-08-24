@@ -80,4 +80,63 @@ describe("AgentsPanel Kiro rendering", () => {
     expect(markup).toContain("1 settled");
     expect(markup).toContain("2.0k tok");
   });
+
+  it("renders running, waiting, failed, stopped, and completed Kiro statuses", () => {
+    const startedAt = "2026-08-22T12:00:00.000Z";
+    const activities = [
+      ["running", "Running audit", "running", "Reading components"],
+      ["waiting", "Waiting audit", "waiting", "Waiting for dependency"],
+      ["failed", "Failed audit", "failed", "Snapshot mismatch"],
+      ["stopped", "Stopped audit", "stopped", "Parent turn stopped"],
+      ["completed", "Completed audit", "completed", "Rendering verified"],
+    ].flatMap(([taskId, title, status, summary], index) => {
+      const started = kiroActivity(`started-${taskId}`, "task.started", startedAt, {
+        taskId: `kiro-native:${taskId}`,
+        title,
+        role: "reviewer",
+      });
+      const settledAt = `2026-08-22T12:00:0${index + 1}.000Z`;
+      if (status === "running" || status === "waiting") {
+        return [
+          started,
+          kiroActivity(`progress-${taskId}`, "task.progress", settledAt, {
+            taskId: `kiro-native:${taskId}`,
+            title,
+            status,
+            summary,
+          }),
+        ];
+      }
+      return [
+        started,
+        kiroActivity(`completed-${taskId}`, "task.completed", settledAt, {
+          taskId: `kiro-native:${taskId}`,
+          title,
+          status,
+          summary,
+        }),
+      ];
+    }) satisfies ReadonlyArray<OrchestrationThreadActivity>;
+    const model = deriveAgentPanelModel({
+      agents: foldSubagentActivities(activities),
+    });
+
+    const markup = renderToStaticMarkup(<AgentsPanel model={model} />);
+
+    expect(markup).toContain("Running audit");
+    expect(markup).toContain("Reading components");
+    expect(markup).toContain("Waiting audit");
+    expect(markup).toContain("Waiting for dependency");
+    expect(markup).toContain("Failed audit");
+    expect(markup).toContain("Snapshot mismatch");
+    expect(markup).toContain("Failed");
+    expect(markup).toContain("Stopped audit");
+    expect(markup).toContain("Parent turn stopped");
+    expect(markup).toContain("Stopped");
+    expect(markup).toContain("Completed audit");
+    expect(markup).toContain("Rendering verified");
+    expect(markup).toContain("Completed");
+    expect(markup).toContain("2 working");
+    expect(markup).toContain("3 settled");
+  });
 });

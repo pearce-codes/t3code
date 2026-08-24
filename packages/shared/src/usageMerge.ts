@@ -26,6 +26,7 @@ export interface ProviderTotals {
   readonly credits: number;
   readonly totalTokens: number;
   readonly records: number;
+  readonly sessions: number;
   readonly costShare: number;
   readonly tokenShare: number;
   readonly creditShare: number;
@@ -149,22 +150,29 @@ function claimSources(environments: readonly EnvironmentUsage[]): {
 function ownedContribution(
   environment: EnvironmentUsage,
   ownerByFingerprint: ReadonlyMap<string, EnvironmentId>,
-): { readonly buckets: readonly UsageBucket[]; readonly sessions: number } {
+): {
+  readonly buckets: readonly UsageBucket[];
+  readonly sessionsByProvider: ReadonlyMap<UsageProviderKind, number>;
+} {
   const ownedProviders = new Set<UsageProviderKind>();
-  let sessions = 0;
+  const sessionsByProvider = new Map<UsageProviderKind, number>();
   for (const source of environment.summary.sources) {
     if (source.status === "missing") continue;
     const key = fingerprintKey(source.fingerprint);
     if (ownerByFingerprint.get(key) === environment.environmentId) {
-      ownedProviders.add(source.fingerprint.provider);
+      const provider = source.fingerprint.provider;
+      ownedProviders.add(provider);
       // Distinct within a directory. Summing per-bucket session counts instead
       // would count a session once per day and model it spans.
-      sessions += source.distinctSessions;
+      sessionsByProvider.set(
+        provider,
+        (sessionsByProvider.get(provider) ?? 0) + source.distinctSessions,
+      );
     }
   }
   return {
     buckets: environment.summary.buckets.filter((bucket) => ownedProviders.has(bucket.provider)),
-    sessions,
+    sessionsByProvider,
   };
 }
 
@@ -252,6 +260,7 @@ export function mergeUsage(
       credits: number;
       totalTokens: number;
       records: number;
+      sessions: number;
     }
   >();
   const modelAccumulator = new Map<
@@ -287,12 +296,22 @@ export function mergeUsage(
   const contributingEnvironments: EnvironmentId[] = [];
 
   for (const environment of current) {
-    const { buckets, sessions: environmentSessions } = ownedContribution(
-      environment,
-      ownerByFingerprint,
-    );
+    const { buckets, sessionsByProvider } = ownedContribution(environment, ownerByFingerprint);
     if (buckets.length > 0) contributingEnvironments.push(environment.environmentId);
-    sessions += environmentSessions;
+
+    for (const [providerKind, providerSessions] of sessionsByProvider) {
+      sessions += providerSessions;
+      if (providerSessions === 0) continue;
+      const provider = providerAccumulator.get(providerKind) ?? {
+        costUsd: 0,
+        credits: 0,
+        totalTokens: 0,
+        records: 0,
+        sessions: 0,
+      };
+      provider.sessions += providerSessions;
+      providerAccumulator.set(providerKind, provider);
+    }
 
     for (const bucket of buckets) {
       const tokens = bucketTokens(bucket);
@@ -318,6 +337,7 @@ export function mergeUsage(
         credits: 0,
         totalTokens: 0,
         records: 0,
+        sessions: 0,
       };
       provider.costUsd += bucket.costUsd;
       provider.credits += bucket.credits;
@@ -399,6 +419,7 @@ export function mergeUsage(
       credits: totals.credits,
       totalTokens: totals.totalTokens,
       records: totals.records,
+      sessions: totals.sessions,
       costShare: costUsd === 0 ? 0 : totals.costUsd / costUsd,
       tokenShare: totalTokens === 0 ? 0 : totals.totalTokens / totalTokens,
       creditShare: credits === 0 ? 0 : totals.credits / credits,

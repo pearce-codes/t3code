@@ -1,0 +1,90 @@
+name: Upstream Sync
+
+on:
+  schedule:
+    - cron: "17 13 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare upstream sync
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout downstream main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fetch canonical upstream
+        run: |
+          git remote add upstream https://github.com/pingdotgg/t3code.git
+          git fetch --no-tags upstream main
+
+      - name: Detect upstream drift
+        id: drift
+        run: |
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "upstream_sha=$(git rev-parse upstream/main)" >> "$GITHUB_OUTPUT"
+            echo "upstream_short_sha=$(git rev-parse --short upstream/main)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check for an active sync
+        id: active
+        if: steps.drift.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          active="$(
+            gh pr list \
+              --state open \
+              --json headRefName \
+              --jq 'map(select(.headRefName | startswith("sync/upstream-"))) | length'
+          )"
+          if [[ "$active" != "0" ]]; then
+            echo "An upstream sync pull request is already open."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream into a sync branch
+        if: steps.drift.outputs.changed == 'true' && steps.active.outputs.exists == 'false'
+        env:
+          UPSTREAM_SHA: ${{ steps.drift.outputs.upstream_sha }}
+        run: |
+          branch="sync/upstream-$(date -u +%Y-%m-%d)-${UPSTREAM_SHA:0:7}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          if ! git merge --no-edit "$UPSTREAM_SHA"; then
+            echo "::error::Upstream has merge conflicts. Follow docs/operations/downstream-sync.md locally."
+            exit 1
+          fi
+          git push origin "$branch"
+          echo "SYNC_BRANCH=$branch" >> "$GITHUB_ENV"
+
+      - name: Open draft sync pull request
+        if: steps.drift.outputs.changed == 'true' && steps.active.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_SHORT_SHA: ${{ steps.drift.outputs.upstream_short_sha }}
+        run: |
+          gh pr create \
+            --draft \
+            --base main \
+            --head "$SYNC_BRANCH" \
+            --title "chore: sync upstream through $UPSTREAM_SHORT_SHA" \
+            --body-file docs/operations/upstream-sync-pr.md

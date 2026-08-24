@@ -82,7 +82,6 @@ export class DesktopEnvironment extends Context.Service<
     readonly runtimeInfo: DesktopRuntimeInfo;
     readonly resolvePickFolderDefaultPath: (rawOptions: unknown) => Option.Option<string>;
     readonly resolveResourcePathCandidates: (fileName: string) => readonly string[];
-    readonly developmentDockIconPath: string;
   }
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
@@ -228,9 +227,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
       isDevelopment ? "com.pearcecodes.pearcecodes.dev" : "com.pearcecodes.pearcecodes",
     ),
-    linuxDesktopEntryName: isDevelopment
-      ? "pearce-codes-dev.desktop"
-      : "pearce-codes.desktop",
+    linuxDesktopEntryName: isDevelopment ? "pearce-codes-dev.desktop" : "pearce-codes.desktop",
     linuxWmClass: isDevelopment ? "pearce-codes-dev" : "pearce-codes",
     linuxApplicationsDir,
     appImagePath: config.appImagePath,
@@ -273,7 +270,6 @@ const make = Effect.fn("desktop.environment.make")(function* (
       path.join(resourcesPath, "resources", fileName),
       path.join(resourcesPath, fileName),
     ],
-    developmentDockIconPath: path.join(rootDir, "assets", "dev", "blueprint-macos-1024.png"),
   });
 });
 

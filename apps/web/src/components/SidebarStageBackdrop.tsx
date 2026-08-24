@@ -346,35 +346,6 @@ function DevBlueprintArt({ compact = false }: { compact?: boolean }) {
             <path d="M590 67V73M724 67V73" strokeOpacity="0.55" />
           </g>
 
-          <g
-            style={{ stroke: "var(--stage-art-line)" }}
-            strokeLinecap="round"
-            strokeOpacity="0.55"
-            strokeWidth="0.6"
-          >
-            <g>
-              <path d="M34 60L38 64M38 60L34 64" />
-            </g>
-            <g>
-              <path d="M228 26H234M231 23V29" />
-            </g>
-            <g>
-              <path d="M143 51H149M146 48V54" />
-            </g>
-            <g>
-              <path d="M316 16L322 22M322 16L316 22" />
-            </g>
-            <g>
-              <path d="M468 70H476M472 66V74" />
-            </g>
-            <g>
-              <path d="M558 28L564 34M564 28L558 34" />
-            </g>
-            <g>
-              <path d="M742 44H750M746 40V48" />
-            </g>
-          </g>
-
           <g style={{ stroke: "var(--stage-art-line)" }} strokeOpacity="0.35" strokeWidth="0.6">
             <circle cx="196" cy="38" r="13" strokeDasharray="3.5 4" />
             <path d="M196 33V43M191 38H201" strokeOpacity="0.6" strokeWidth="0.4" />

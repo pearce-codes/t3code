@@ -1,3 +1,11 @@
+import { BUILT_IN_THEMES, getThemeColorsForAppearance } from "@t3tools/shared/themePalettes";
+
+import {
+  getMobileThemeVariables,
+  themeColorToNativeColor,
+  type MobileThemeId,
+} from "../../lib/mobileTheme";
+
 export type TerminalAppearanceScheme = "light" | "dark";
 
 export interface TerminalTheme {
@@ -11,12 +19,12 @@ export interface TerminalTheme {
 }
 
 const PIERRE_LIGHT_THEME: TerminalTheme = {
-  background: "#f4efe5",
-  foreground: "#3f342b",
-  mutedForeground: "#6e6257",
-  border: "#d2c5b4",
-  cursorForeground: "#996509",
-  cursorBackground: "#f4efe5",
+  background: "#151410",
+  foreground: "#f0d98e",
+  mutedForeground: "#aa9b87",
+  border: "#4b4035",
+  cursorForeground: "#f6b93d",
+  cursorBackground: "#151410",
   palette: [
     "#1F1F21",
     "#ff2e3f",
@@ -66,6 +74,28 @@ const PIERRE_DARK_THEME: TerminalTheme = {
 
 export function getPierreTerminalTheme(scheme: TerminalAppearanceScheme): TerminalTheme {
   return scheme === "light" ? PIERRE_LIGHT_THEME : PIERRE_DARK_THEME;
+}
+
+export function getMobileTerminalTheme(
+  themeId: MobileThemeId,
+  scheme: TerminalAppearanceScheme,
+): TerminalTheme {
+  const base = getPierreTerminalTheme(scheme);
+  if (themeId === "t3-code") return base;
+
+  const theme = BUILT_IN_THEMES.find((candidate) => candidate.id === themeId) ?? BUILT_IN_THEMES[0];
+  const palette = getThemeColorsForAppearance(theme, scheme) ?? theme.colors;
+  const colors = getMobileThemeVariables(themeId, scheme);
+  const background = themeColorToNativeColor(palette.terminalBackground);
+  return {
+    ...base,
+    background,
+    foreground: themeColorToNativeColor(palette.terminalForeground),
+    mutedForeground: colors["--color-foreground-muted"],
+    border: colors["--color-border"],
+    cursorForeground: themeColorToNativeColor(palette.terminalCursor),
+    cursorBackground: background,
+  };
 }
 
 export function buildGhosttyThemeConfig(theme: TerminalTheme): string {

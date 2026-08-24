@@ -4,26 +4,31 @@
 /* ─── Theme tokens ──────────────────────────────────────────────────── */
 @layer theme {
   :root {
+    @variant android {
+      --font-mono: "monospace";
+    }
+
     @variant light {
       /* Page backgrounds */
-      --color-screen: #f4efe5;
-      --color-sheet: rgba(244, 239, 229, 0.98);
+      --color-screen: #d9dad5;
+      --color-sheet: rgba(217, 218, 213, 0.98);
+      --color-sheet-solid: #d9dad5;
 
       /* Card / surface */
-      --color-card: #fbf8f2;
-      --color-card-alt: #ede5da;
-      --color-card-translucent: rgba(251, 248, 242, 0.82);
+      --color-card: #e8e9e4;
+      --color-card-alt: #ced0ca;
+      --color-card-translucent: rgba(232, 233, 228, 0.84);
 
       /* Text */
-      --color-foreground: #2c241e;
-      --color-foreground-secondary: #54483e;
-      --color-foreground-muted: #6e6257;
-      --color-foreground-tertiary: #8c7d6d;
+      --color-foreground: #242520;
+      --color-foreground-secondary: #484a44;
+      --color-foreground-muted: #60625b;
+      --color-foreground-tertiary: #777a72;
 
       /* Borders & separators */
-      --color-border: rgba(86, 65, 45, 0.16);
-      --color-border-subtle: rgba(86, 65, 45, 0.11);
-      --color-separator: rgba(86, 65, 45, 0.08);
+      --color-border: rgba(48, 50, 45, 0.2);
+      --color-border-subtle: rgba(48, 50, 45, 0.14);
+      --color-separator: rgba(48, 50, 45, 0.1);
 
       /* Subtle backgrounds (badges, pills, overlays) */
       --color-subtle: rgba(0, 0, 0, 0.04);
@@ -33,15 +38,18 @@
       --color-inline-skill-foreground: #a21caf;
 
       /* Primary action */
-      --color-primary: #805209;
-      --color-primary-foreground: #fff8e7;
+      --color-primary: #765000;
+      --color-primary-foreground: #fff4d0;
       --color-primary-shadow: rgba(86, 53, 6, 0.24);
 
       /* Secondary action */
-      --color-secondary: #fbf8f2;
-      --color-secondary-foreground: #2c241e;
-      --color-secondary-border: rgba(86, 65, 45, 0.16);
-      --color-switch-active: #34c759;
+      --color-secondary: #e8e9e4;
+      --color-secondary-foreground: #242520;
+      --color-secondary-border: rgba(48, 50, 45, 0.2);
+      --color-switch-active-track: #34c759;
+      --color-switch-active-thumb: #ffffff;
+      --color-switch-inactive-track: rgba(0, 0, 0, 0.08);
+      --color-switch-inactive-thumb: #8e8e93;
 
       /* Danger */
       --color-danger: #fef2f2;
@@ -49,29 +57,29 @@
       --color-danger-foreground: #dc2626;
 
       /* Inputs */
-      --color-input: #fffaf0;
-      --color-input-border: rgba(86, 65, 45, 0.2);
-      --color-sidebar-search: rgba(128, 82, 9, 0.1);
-      --color-placeholder: #8c7d6d;
+      --color-input: #f1f1ec;
+      --color-input-border: rgba(48, 50, 45, 0.24);
+      --color-sidebar-search: rgba(36, 37, 32, 0.08);
+      --color-placeholder: #777a72;
 
       /* Icons */
-      --color-icon: #2c241e;
-      --color-icon-muted: #6e6257;
-      --color-icon-subtle: #9a8a78;
+      --color-icon: #242520;
+      --color-icon-muted: #60625b;
+      --color-icon-subtle: #85887f;
 
       /* Header / glass chrome */
-      --color-header: rgba(234, 225, 211, 0.97);
-      --color-header-border: rgba(86, 65, 45, 0.12);
-      --color-glass-surface: rgba(251, 248, 242, 0.74);
+      --color-header: rgba(201, 203, 198, 0.97);
+      --color-header-border: rgba(48, 50, 45, 0.16);
+      --color-glass-surface: rgba(232, 233, 228, 0.76);
       --color-glass-tint: rgba(246, 185, 61, 0.06);
 
       /* StatusBar */
-      --color-status-bar: #eae1d3;
+      --color-status-bar: #c9cbc6;
 
       /* Markdown */
       --color-md-body: #111111;
       --color-md-strong: #000000;
-      --color-md-link: #805209;
+      --color-md-link: #765000;
       --color-md-blockquote-border: rgba(0, 0, 0, 0.08);
       --color-md-blockquote-bg: rgba(0, 0, 0, 0.02);
       --color-md-code-bg: rgba(0, 0, 0, 0.04);
@@ -83,18 +91,19 @@
       --color-md-hr: rgba(0, 0, 0, 0.08);
 
       /* iMessage-style user bubble */
-      --color-user-bubble: #805209;
-      --color-user-bubble-foreground: #fff8e7;
-      --color-user-bubble-foreground-muted: rgba(255, 248, 231, 0.78);
+      --color-user-bubble: #765000;
+      --color-user-bubble-foreground: #fff4d0;
+      --color-user-bubble-foreground-muted: rgba(255, 244, 208, 0.78);
+      --color-user-bubble-skill-foreground: #f0abfc;
 
       /* Drawer / modal backdrop */
       --color-backdrop: rgba(0, 0, 0, 0.22);
-      --color-drawer: rgba(251, 248, 242, 0.99);
+      --color-drawer: rgba(232, 233, 228, 0.99);
       --color-drawer-shadow: rgba(0, 0, 0, 0.12);
 
       /* Misc */
       --color-dot-separator: rgba(0, 0, 0, 0.2);
-      --color-wordmark: #805209;
+      --color-wordmark: #765000;
       --color-chevron: rgba(0, 0, 0, 0.2);
     }
 
@@ -102,6 +111,7 @@
       /* Page backgrounds */
       --color-screen: #171310;
       --color-sheet: rgba(23, 19, 16, 0.98);
+      --color-sheet-solid: #171310;
 
       /* Card / surface */
       --color-card: #1e1814;
@@ -135,7 +145,10 @@
       --color-secondary: #251d18;
       --color-secondary-foreground: #eee5d3;
       --color-secondary-border: rgba(246, 185, 61, 0.12);
-      --color-switch-active: #30d158;
+      --color-switch-active-track: #30d158;
+      --color-switch-active-thumb: #ffffff;
+      --color-switch-inactive-track: rgba(255, 255, 255, 0.06);
+      --color-switch-inactive-thumb: #8e8e93;
 
       /* Danger */
       --color-danger: rgba(239, 68, 68, 0.14);
@@ -180,6 +193,7 @@
       --color-user-bubble: #8a621b;
       --color-user-bubble-foreground: #fff4d8;
       --color-user-bubble-foreground-muted: rgba(255, 244, 216, 0.78);
+      --color-user-bubble-skill-foreground: #f0abfc;
 
       /* Drawer / modal backdrop */
       --color-backdrop: rgba(0, 0, 0, 0.48);

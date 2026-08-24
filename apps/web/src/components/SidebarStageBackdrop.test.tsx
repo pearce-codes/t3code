@@ -61,6 +61,14 @@ describe("SidebarStageBackdrop", () => {
     expect(devMarkup).not.toMatch(/#[0-9a-f]{3,8}/i);
   });
 
+  it("keeps the dev grid without decorative sparkle marks", () => {
+    const markup = renderToStaticMarkup(<StageBackdropArt variant="dev" />);
+
+    expect(markup).toContain("var(--stage-art-grid-line)");
+    expect(markup).not.toContain("M228 26H234M231 23V29");
+    expect(markup).not.toContain("M34 60L38 64M38 60L34 64");
+  });
+
   it.each([
     ["nightly", "96 0 8192 96"],
     ["dev", "64 0 8192 96"],

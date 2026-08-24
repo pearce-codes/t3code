@@ -318,6 +318,18 @@ export class DesktopIconSourceMissingError extends Schema.TaggedErrorClass<Deskt
   }
 }
 
+export class DesktopDmgBackgroundSourceMissingError extends Schema.TaggedErrorClass<DesktopDmgBackgroundSourceMissingError>()(
+  "DesktopDmgBackgroundSourceMissingError",
+  {
+    channel: Schema.Literals(["latest", "nightly"]),
+    sourcePath: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Desktop ${this.channel} DMG background source is missing at ${this.sourcePath}`;
+  }
+}
+
 export class BundledClientAssetsMissingError extends Schema.TaggedErrorClass<BundledClientAssetsMissingError>()(
   "BundledClientAssetsMissingError",
   {
@@ -807,6 +819,21 @@ export const WINDOWS_SERVER_ASAR_IGNORE_GLOBS = [
   "**/node_modules/.bin",
   "**/node_modules/.bin/**",
 ] as const;
+
+export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type) {
+  const unusedArch = arch === "arm64" ? "x64" : "arm64";
+  const unusedPrebuild = `**/node_modules/node-pty/prebuilds/win32-${unusedArch}`;
+  const unusedConpty = `**/node_modules/node-pty/third_party/conpty/*/win10-${unusedArch}`;
+
+  return [
+    ...WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
+    unusedPrebuild,
+    `${unusedPrebuild}/**`,
+    unusedConpty,
+    `${unusedConpty}/**`,
+  ];
+}
+
 export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 80;
 export const WINDOWS_SERVER_RESOURCE_SOURCE_DIR = "apps/desktop/prod-resources/windows-server";
 export const WINDOWS_SERVER_EXTRA_RESOURCES = [
@@ -1634,7 +1661,7 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
   },
 );
 
-const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input: {
+export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input: {
   readonly repoRoot: string;
   readonly stageResourcesDir: string;
   readonly platform: typeof BuildPlatform.Type;
@@ -1646,28 +1673,33 @@ const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input:
   const manifestPath = path.join(input.repoRoot, "native/resource-monitor/Cargo.toml");
   const executableName = resourceMonitorExecutableName(input.platform);
   const rustTargets = resolveResourceMonitorRustTargets(input.platform, input.arch);
+  const reuseResourceMonitor = yield* Config.boolean("T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR").pipe(
+    Config.withDefault(false),
+  );
   const builtBinaries: string[] = [];
 
   for (const rustTarget of rustTargets) {
-    const spawnCommand = yield* resolveSpawnCommand("cargo", [
-      "build",
-      "--locked",
-      "--release",
-      "--manifest-path",
-      manifestPath,
-      "--target",
-      rustTarget,
-    ]);
-    yield* runCommand(
-      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-        cwd: input.repoRoot,
-        shell: spawnCommand.shell,
-      }),
-      {
-        label: `cargo build resource monitor (${rustTarget})`,
-        verbose: input.verbose,
-      },
-    );
+    if (!reuseResourceMonitor) {
+      const spawnCommand = yield* resolveSpawnCommand("cargo", [
+        "build",
+        "--locked",
+        "--release",
+        "--manifest-path",
+        manifestPath,
+        "--target",
+        rustTarget,
+      ]);
+      yield* runCommand(
+        ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+          cwd: input.repoRoot,
+          shell: spawnCommand.shell,
+        }),
+        {
+          label: `cargo build resource monitor (${rustTarget})`,
+          verbose: input.verbose,
+        },
+      );
+    }
 
     const binaryPath = path.join(
       input.repoRoot,
@@ -1683,6 +1715,9 @@ const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input:
         platform: input.platform,
         arch: input.arch,
       });
+    }
+    if (reuseResourceMonitor) {
+      yield* Effect.log(`[desktop-artifact] Reusing cached resource monitor (${rustTarget}).`);
     }
     builtBinaries.push(binaryPath);
   }
@@ -1772,6 +1807,39 @@ function stageMacIcons(stageResourcesDir: string, sourcePng: string, verbose: bo
     yield* generateMacIconSet(sourcePng, iconIcnsPath, tmpRoot, path, verbose);
   });
 }
+
+export const stageDesktopDmgBackground = Effect.fn("stageDesktopDmgBackground")(function* (
+  stageResourcesDir: string,
+  channel: "latest" | "nightly",
+  verbose: boolean,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const sourcePath = path.join(stageResourcesDir, "dmg", `dmg-background-${channel}.svg`);
+  if (!(yield* fs.exists(sourcePath))) {
+    return yield* new DesktopDmgBackgroundSourceMissingError({ channel, sourcePath });
+  }
+
+  for (const output of [
+    { suffix: "", width: 540, height: 380 },
+    { suffix: "@2x", width: 1080, height: 760 },
+  ] as const) {
+    const targetPath = path.join(
+      stageResourcesDir,
+      "dmg",
+      `dmg-background-${channel}${output.suffix}.png`,
+    );
+    yield* runCommand(
+      ChildProcess.make(
+        {},
+      )`sips -s format png -z ${output.height} ${output.width} ${sourcePath} --out ${targetPath}`,
+      {
+        label: `sips ${channel} DMG background${output.suffix || "@1x"}`,
+        verbose,
+      },
+    );
+  }
+});
 
 function stageLinuxIcons(stageResourcesDir: string, sourcePng: string, verbose: boolean) {
   return Effect.gen(function* () {
@@ -2042,6 +2110,29 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     };
   }
 
+  if (platform === "mac" && target === "dmg") {
+    buildConfig.dmg = {
+      // Give the themed installer its own Finder volume name. Finder caches
+      // DMG window backgrounds by volume name, so reusing a generic name can
+      // make a newly built background look unchanged during testing.
+      title: `${resolveDesktopProductName(version)} ${version} Installer`,
+      background: `dmg/dmg-background-${updateChannel}.png`,
+      window: {
+        width: 540,
+        // Finder counts its 32px title bar in the window bounds. The themed
+        // background itself is 380px tall, so add the chrome height here to
+        // keep the full canvas visible.
+        height: 412,
+      },
+      contents: [
+        { x: 130, y: 220, type: "file" },
+        { x: 410, y: 220, type: "link", path: "/Applications" },
+      ],
+      iconSize: 80,
+      iconTextSize: 12,
+    };
+  }
+
   if (platform === "linux") {
     buildConfig.linux = {
       target: [target],
@@ -2188,6 +2279,7 @@ const stageWslNodePtyPrebuild = Effect.fn("stageWslNodePtyPrebuild")(function* (
 export const packWindowsServerAsar = Effect.fn("packWindowsServerAsar")(function* (input: {
   readonly sourceDir: string;
   readonly asarPath: string;
+  readonly arch: typeof BuildArch.Type;
 }) {
   const fs = yield* FileSystem.FileSystem;
   yield* Effect.tryPromise({
@@ -2195,7 +2287,7 @@ export const packWindowsServerAsar = Effect.fn("packWindowsServerAsar")(function
       createPackageWithOptions(input.sourceDir, input.asarPath, {
         dot: true,
         unpack: WINDOWS_SERVER_ASAR_UNPACK_GLOB,
-        globOptions: { ignore: [...WINDOWS_SERVER_ASAR_IGNORE_GLOBS] },
+        globOptions: { ignore: resolveWindowsServerAsarIgnoreGlobs(input.arch) },
       }),
     catch: (cause) => new WindowsServerSidecarPackError({ asarPath: input.asarPath, cause }),
   });
@@ -2289,7 +2381,11 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
 
   yield* Effect.log("[desktop-artifact] Packing server.asar...");
   yield* fs.makeDirectory(path.dirname(input.asarPath), { recursive: true });
-  yield* packWindowsServerAsar({ sourceDir: serverStageDir, asarPath: input.asarPath });
+  yield* packWindowsServerAsar({
+    sourceDir: serverStageDir,
+    asarPath: input.asarPath,
+    arch: input.arch,
+  });
   const packedStat = yield* fs.stat(input.asarPath);
   yield* Effect.log(
     `[desktop-artifact] Packed server.asar (${String(packedStat.size)} bytes) + unpacked natives.`,
@@ -2741,6 +2837,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* Effect.log("[desktop-artifact] Staging release app...");
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
+  if (options.platform === "mac" && options.target === "dmg") {
+    yield* stageDesktopDmgBackground(
+      stageResourcesDir,
+      resolveDesktopUpdateChannel(appVersion),
+      options.verbose,
+    );
+  }
   // On Windows the server tree ships in the server.asar sidecar instead of
   // app.asar (see stageWindowsServerSidecar), so the app stage omits it.
   if (options.platform !== "win") {
