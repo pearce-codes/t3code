@@ -59,7 +59,6 @@ describe("branding", () => {
     expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Latest");
     expect(branding.APP_STAGE_LABEL).toBe("Latest");
     expect(branding.APP_DISPLAY_NAME).toBe("Pearce Codes");
-
   });
 
   it("ignores unknown hosted app channels", async () => {

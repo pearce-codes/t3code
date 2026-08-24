@@ -154,10 +154,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: undefined,
         });
 
-        assert.equal(
-          env.PEARCE_CODES_HOME,
-          NodePath.resolve(NodeOS.homedir(), ".pearce-codes"),
-        );
+        assert.equal(env.PEARCE_CODES_HOME, NodePath.resolve(NodeOS.homedir(), ".pearce-codes"));
         assert.equal(env.T3CODE_HOME, undefined);
         assert.equal(env.T3CODE_NO_BROWSER, "1");
       }),
@@ -200,7 +197,6 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         });
 
         assert.equal(env.T3CODE_NO_BROWSER, "1");
-
       }),
     );
 

@@ -188,6 +188,26 @@ function assertMissing(path: string, message: string): void {
 const tempRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-release-smoke-"));
 
 try {
+  const releaseWorkflow = NodeFS.readFileSync(
+    NodePath.resolve(repoRoot, ".github/workflows/release.yml"),
+    "utf8",
+  );
+  assertContains(
+    releaseWorkflow,
+    "github.repository == 'pingdotgg/t3code' && needs.preflight.result == 'success'",
+    "The upstream relay configuration job must stay disabled for downstream releases.",
+  );
+  assertContains(
+    releaseWorkflow,
+    "github.repository == 'pearce-codes/t3code' || needs.relay_public_config.result == 'success'",
+    "Pearce CLI publishing must not depend on upstream relay configuration.",
+  );
+  assertContains(
+    releaseWorkflow,
+    "- name: Download relay client tracing config\n        if: needs.relay_public_config.result == 'success'",
+    "Relay tracing artifacts must only be downloaded when relay configuration succeeds.",
+  );
+
   copyWorkspaceManifestFixture(tempRoot);
 
   NodeChildProcess.execFileSync(
