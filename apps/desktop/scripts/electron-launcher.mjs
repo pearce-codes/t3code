@@ -401,6 +401,12 @@ export function resolveElectronLaunchCommand(args = []) {
   };
 }
 
+export function sanitizeElectronAppEnvironment(environment = process.env) {
+  const childEnvironment = { ...environment };
+  delete childEnvironment.ELECTRON_RUN_AS_NODE;
+  return childEnvironment;
+}
+
 export function resolveElectronBinaryPath({
   ensureRuntime = ensureElectronRuntime,
   createRequire = NodeModule.createRequire,

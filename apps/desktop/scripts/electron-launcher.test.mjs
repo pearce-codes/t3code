@@ -5,6 +5,7 @@ import {
   resolveElectronBinaryPath,
   resolveMacLauncherIconPaths,
   resolveMacLauncherPaths,
+  sanitizeElectronAppEnvironment,
 } from "./electron-launcher.mjs";
 
 describe("electron development launcher", () => {
@@ -88,5 +89,15 @@ describe("electron development launcher", () => {
     assert.equal(development.generatedIconPath, "/runtime/icon-dev.icns");
     assert.match(production.sourceIconPath, /assets\/prod\/black-macos-1024\.png$/);
     assert.equal(production.generatedIconPath, "/runtime/icon-prod.icns");
+  });
+
+  it("removes inherited Node mode before launching Electron apps", () => {
+    const environment = sanitizeElectronAppEnvironment({
+      ELECTRON_RUN_AS_NODE: "1",
+      PEARCE_CODES_HOME: "/tmp/pearce-codes",
+    });
+
+    assert.notProperty(environment, "ELECTRON_RUN_AS_NODE");
+    assert.equal(environment.PEARCE_CODES_HOME, "/tmp/pearce-codes");
   });
 });
