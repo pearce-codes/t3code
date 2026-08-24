@@ -165,7 +165,7 @@ try {
   if (checkOnly) {
     if (stale.length > 0) {
       console.error(
-        `Generated icon assets are stale:\n${stale.map(({ target }) => `- ${target}`).NodePath.join("\n")}`,
+        `Generated icon assets are stale:\n${stale.map(({ target }) => `- ${target}`).join("\n")}`,
       );
       process.exitCode = 1;
     } else {
