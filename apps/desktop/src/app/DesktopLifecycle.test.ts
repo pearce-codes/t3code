@@ -17,7 +17,7 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 function makeElectronAppLayer(
   appListeners: Map<string, (...args: readonly unknown[]) => void>,
-  quit: Effect.Effect<void> = Effect.void,
+  exit: Effect.Effect<void> = Effect.void,
 ) {
   const registerListener = (eventName: string, listener: (...args: readonly unknown[]) => void) =>
     Effect.acquireRelease(
@@ -35,8 +35,8 @@ function makeElectronAppLayer(
     name: Effect.succeed("T3 Code"),
     systemLocale: Effect.succeed("en-US"),
     whenReady: Effect.void,
-    quit,
-    exit: () => Effect.void,
+    quit: Effect.void,
+    exit: () => exit,
     relaunch: () => Effect.void,
     setPath: () => Effect.void,
     setName: () => Effect.void,
@@ -149,12 +149,12 @@ describe("DesktopLifecycle", () => {
       const appListeners = new Map<string, (...args: readonly unknown[]) => void>();
       const shutdownRequested = yield* Deferred.make<void>();
       const allowShutdown = yield* Deferred.make<void>();
-      const quitRequested = yield* Deferred.make<void>();
+      const exitRequested = yield* Deferred.make<void>();
       const events: string[] = [];
 
-      const quit = Effect.sync(() => {
-        events.push("quit");
-      }).pipe(Effect.andThen(Deferred.succeed(quitRequested, undefined)), Effect.asVoid);
+      const exit = Effect.sync(() => {
+        events.push("exit");
+      }).pipe(Effect.andThen(Deferred.succeed(exitRequested, undefined)), Effect.asVoid);
       const destroyAll = Effect.sync(() => {
         events.push("destroy");
       });
@@ -178,7 +178,7 @@ describe("DesktopLifecycle", () => {
       } as DesktopEnvironment.DesktopEnvironment["Service"]);
 
       const layer = DesktopLifecycle.layer.pipe(
-        Layer.provideMerge(makeElectronAppLayer(appListeners, quit)),
+        Layer.provideMerge(makeElectronAppLayer(appListeners, exit)),
         Layer.provideMerge(electronThemeLayer),
         Layer.provideMerge(makeElectronWindowLayer(destroyAll)),
         Layer.provideMerge(makeDesktopWindowLayer({ flushMainWindowBounds })),
@@ -198,10 +198,10 @@ describe("DesktopLifecycle", () => {
           yield* Deferred.await(shutdownRequested);
           const eventsBeforeCleanup = [...events];
           yield* Deferred.succeed(allowShutdown, undefined);
-          yield* Deferred.await(quitRequested);
+          yield* Deferred.await(exitRequested);
 
           assert.deepEqual(eventsBeforeCleanup, ["flush", "destroy", "request"]);
-          assert.deepEqual(events, ["flush", "destroy", "request", "quit"]);
+          assert.deepEqual(events, ["flush", "destroy", "request", "exit"]);
         }),
       ).pipe(Effect.provide(layer));
     }),

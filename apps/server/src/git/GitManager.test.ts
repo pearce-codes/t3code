@@ -23,7 +23,6 @@ import type {
 } from "@t3tools/contracts";
 
 import {
-  DEFAULT_SERVER_SETTINGS,
   GitCommandError,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -1933,6 +1932,11 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       yield* initRepo(repoDir);
       NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "hello\nworld\n");
       const missingInstanceId = ProviderInstanceId.make("missing_writer");
+      const fallbackModelSelection = {
+        instanceId: ProviderInstanceId.make("kiro"),
+        model: "auto",
+        options: [{ id: "effort", value: "low" }],
+      } as const;
       let generatedModelSelection:
         | TextGeneration.CommitMessageGenerationInput["modelSelection"]
         | undefined;
@@ -1949,6 +1953,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
             instanceId: missingInstanceId,
             model: "missing-model",
           },
+          textGenerationModelSelection: fallbackModelSelection,
         },
         textGeneration: {
           generateCommitMessage: (input) => {
@@ -1963,7 +1968,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         action: "commit",
       });
 
-      expect(generatedModelSelection).toEqual(DEFAULT_SERVER_SETTINGS.textGenerationModelSelection);
+      expect(generatedModelSelection).toEqual(fallbackModelSelection);
     }),
   );
 
