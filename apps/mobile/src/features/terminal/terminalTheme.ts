@@ -11,13 +11,12 @@ export interface TerminalTheme {
 }
 
 const PIERRE_LIGHT_THEME: TerminalTheme = {
-  // Pierre terminal palette with the app's shared screen background.
-  background: "#f2f2f7",
-  foreground: "#6C6C71",
-  mutedForeground: "#8E8E95",
-  border: "#eeeeef",
-  cursorForeground: "#009fff",
-  cursorBackground: "#f2f2f7",
+  background: "#f4efe5",
+  foreground: "#3f342b",
+  mutedForeground: "#6e6257",
+  border: "#d2c5b4",
+  cursorForeground: "#996509",
+  cursorBackground: "#f4efe5",
   palette: [
     "#1F1F21",
     "#ff2e3f",
@@ -39,13 +38,12 @@ const PIERRE_LIGHT_THEME: TerminalTheme = {
 };
 
 const PIERRE_DARK_THEME: TerminalTheme = {
-  // Pierre terminal palette with the app's shared screen background.
-  background: "#0a0a0a",
-  foreground: "#adadb1",
-  mutedForeground: "#8E8E95",
-  border: "#2e2e30",
-  cursorForeground: "#009fff",
-  cursorBackground: "#0a0a0a",
+  background: "#100e0c",
+  foreground: "#e8dcc5",
+  mutedForeground: "#aa9b87",
+  border: "#392b21",
+  cursorForeground: "#f6b93d",
+  cursorBackground: "#100e0c",
   palette: [
     "#141415",
     "#ff2e3f",
