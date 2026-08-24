@@ -1,8 +1,21 @@
-import { CheckpointRef, EnvironmentId, MessageId, TurnId } from "@t3tools/contracts";
+import {
+  CheckpointRef,
+  EnvironmentId,
+  EventId,
+  MessageId,
+  TurnId,
+  type OrchestrationThreadActivity,
+} from "@t3tools/contracts";
+import {
+  deriveAgentPanelModel,
+  foldSubagentActivities,
+} from "@t3tools/client-runtime/state/subagentRuntime";
 import { createRef, type ReactNode, type Ref } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import type { LegendListRef } from "@legendapp/list/react";
+
+import { deriveTimelineEntries, deriveTurnPlans, deriveWorkLogEntries } from "../../session-logic";
 
 vi.mock("@legendapp/list/react", async () => {
   const legendListTestId = "legend-list";
@@ -552,6 +565,106 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Context compacted");
     expect(markup).toContain("Work Log");
+  });
+
+  it("renders Kiro subagents, tasks, and plans from canonical runtime events", () => {
+    const turnId = TurnId.make("kiro-turn-1");
+    const activities: OrchestrationThreadActivity[] = [
+      {
+        id: EventId.make("kiro-subagent-started"),
+        createdAt: "2026-03-17T19:12:28.000Z",
+        kind: "task.started",
+        summary: "Task started",
+        tone: "info",
+        turnId,
+        sequence: 1,
+        payload: {
+          taskId: "kiro-native:researcher-1",
+          taskType: "subagent",
+          agentKind: "agent",
+          title: "Audit provider rendering",
+          description: "Audit provider rendering",
+          role: "reviewer",
+          timelineBypass: true,
+        },
+      },
+      {
+        id: EventId.make("kiro-subagent-progress"),
+        createdAt: "2026-03-17T19:12:29.000Z",
+        kind: "task.progress",
+        summary: "Task progress",
+        tone: "info",
+        turnId,
+        sequence: 2,
+        payload: {
+          taskId: "kiro-native:researcher-1",
+          taskType: "subagent",
+          agentKind: "agent",
+          title: "Audit provider rendering",
+          role: "reviewer",
+          summary: "Checking Pearce Codes UI",
+          status: "running",
+          timelineBypass: true,
+        },
+      },
+      {
+        id: EventId.make("kiro-plan"),
+        createdAt: "2026-03-17T19:12:30.000Z",
+        kind: "turn.plan.updated",
+        summary: "Plan updated",
+        tone: "info",
+        turnId,
+        sequence: 3,
+        payload: {
+          explanation: "Kiro implementation plan",
+          plan: [
+            { step: "Inspect Kiro events", status: "completed" },
+            { step: "Render Pearce Codes UI", status: "inProgress" },
+            { step: "Run focused tests", status: "pending" },
+          ],
+        },
+      },
+      {
+        id: EventId.make("kiro-tool"),
+        createdAt: "2026-03-17T19:12:31.000Z",
+        kind: "tool.completed",
+        summary: "Search workspace",
+        tone: "tool",
+        turnId,
+        sequence: 4,
+        payload: {
+          itemType: "command_execution",
+          command: "rg kiro apps/web",
+          status: "completed",
+        },
+      },
+    ];
+    const timelineEntries = deriveTimelineEntries(
+      [],
+      [],
+      deriveWorkLogEntries(activities),
+      deriveTurnPlans(activities),
+    );
+    const agentPanelModel = deriveAgentPanelModel({
+      agents: foldSubagentActivities(activities),
+    });
+
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        activeTurnInProgress
+        agentPanelModel={agentPanelModel}
+        runningTurnId={turnId}
+        timelineEntries={timelineEntries}
+      />,
+    );
+
+    expect(markup).toContain("Kicked off 1 subagent");
+    expect(markup).toContain("1 working");
+    expect(markup).toContain("Open Agents");
+    expect(markup).toContain("Render Pearce Codes UI");
+    expect(markup).toContain("1/3");
+    expect(markup).toContain("Search workspace");
   });
 
   it("formats changed file paths from the workspace root", () => {
