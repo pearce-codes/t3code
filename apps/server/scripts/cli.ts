@@ -28,8 +28,7 @@ import {
   ServerCliPublishIconSourceMissingError,
   ServerCliPublishIconTargetMissingError,
 } from "./cliErrors.ts";
-
-const PublishedPackageName = "@pearcecodes/t3code";
+import { createVpPmPublishArgs, PublishedPackageName } from "./cliPublish.ts";
 
 interface PackageJson {
   name: string;
@@ -180,31 +179,6 @@ const buildCmd = Command.make(
 // ---------------------------------------------------------------------------
 // publish subcommand
 // ---------------------------------------------------------------------------
-
-interface PublishCommandConfig {
-  readonly access: string;
-  readonly tag: string;
-  readonly provenance: boolean;
-  readonly dryRun: boolean;
-}
-
-const createVpPmPublishArgs = (config: PublishCommandConfig): ReadonlyArray<string> => {
-  const args = [
-    "publish",
-    "--filter",
-    "t3",
-    "--access",
-    config.access,
-    "--tag",
-    config.tag,
-    "--no-git-checks",
-  ];
-
-  if (config.provenance) args.push("--provenance");
-  if (config.dryRun) args.push("--dry-run");
-
-  return args;
-};
 
 const publishCmd = Command.make(
   "publish",
