@@ -143,6 +143,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       yield* serverSettings.updateSettings({
         providers: {
           codex: {
+            enabled: true,
             binaryPath: "/usr/local/bin/codex",
             homePath: "/Users/julius/.codex",
           },
@@ -248,6 +249,11 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       // Switch to Codex — the stale Claude "effort" in options must not
       // cause the update to lose the selected model.
       const next = yield* serverSettings.updateSettings({
+        providers: {
+          codex: {
+            enabled: true,
+          },
+        },
         textGenerationModelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5.4",
@@ -423,29 +429,25 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       yield* serverSettings.updateSettings({
         textGenerationModelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.model,
-          options: createModelSelection(
-            ProviderInstanceId.make("codex"),
-            DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.model,
-            [
-              { id: "reasoningEffort", value: "high" },
-              { id: "fastMode", value: true },
-            ],
-          ).options!,
+          instanceId: ProviderInstanceId.make("kiro"),
+          model: "auto",
+          options: createModelSelection(ProviderInstanceId.make("kiro"), "auto", [
+            { id: "effort", value: "high" },
+            { id: "agent", value: "build" },
+          ]).options!,
         },
       });
 
       const next = yield* serverSettings.updateSettings({
         textGenerationModelSelection: {
-          instanceId: DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.instanceId,
-          model: DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.model,
+          instanceId: ProviderInstanceId.make("kiro"),
+          model: "auto",
         },
       });
 
       assert.deepEqual(next.textGenerationModelSelection, {
-        instanceId: DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.instanceId,
-        model: DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.model,
+        instanceId: ProviderInstanceId.make("kiro"),
+        model: "auto",
       });
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
@@ -568,7 +570,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       });
 
       assert.deepEqual(next.providers.codex, {
-        enabled: true,
+        enabled: false,
         binaryPath: "/opt/homebrew/bin/codex",
         homePath: "",
         shadowHomePath: "",
